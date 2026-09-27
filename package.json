@@ -7,7 +7,7 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "npm run build -w @proxy-shopping/core && npm run build -w @proxy-shopping/web",
+    "build": "npm run build -w @proxy-shopping/core && npm run build -w @proxy-shopping/web && npm run build -w @proxy-shopping/demo",
     "test": "npm test -w @proxy-shopping/core",
     "test:integration": "npm run test:integration -w @proxy-shopping/core",
     "typecheck": "npm run typecheck --workspaces --if-present"

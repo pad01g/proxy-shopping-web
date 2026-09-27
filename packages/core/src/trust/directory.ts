@@ -1,3 +1,4 @@
+import type { Filter } from 'nostr-tools/filter';
 import type { NostrEvent } from 'nostr-tools/pure';
 import { KIND, tagValue } from '../nostr/kinds.js';
 import type { Payment } from '../nostr/messages.js';
@@ -58,20 +59,25 @@ export class TrustDirectory {
     const t = this.opts.transport;
     const cached = (await this.opts.storage.get<NostrEvent[]>('trust/events')) ?? [];
 
+    // Relays under load can answer slowly; an empty answer is retried once before we conclude there is nothing.
+    const ask = async (filter: Filter): Promise<NostrEvent[]> => {
+      const got = await t.query(relays, filter, { maxWaitMs: 10_000 });
+      return got.length ? got : t.query(relays, filter, { maxWaitMs: 10_000 });
+    };
     const fetched: NostrEvent[] = [];
     if (coordinators.length) {
-      fetched.push(...(await t.query(relays, { kinds: [KIND.delegation], authors: coordinators })));
+      fetched.push(...(await ask({ kinds: [KIND.delegation], authors: coordinators })));
     }
     const all = () => latestEvents([...cached, ...fetched]);
     const operators = [...new Set(all().filter((e) => e.kind === KIND.delegation).map((e) => tagValue(e.tags, 'd') ?? ''))].filter(Boolean);
     if (operators.length) {
-      fetched.push(...(await t.query(relays, { kinds: [KIND.operatorList], authors: operators, '#d': [this.opts.network] })));
+      fetched.push(...(await ask({ kinds: [KIND.operatorList], authors: operators, '#d': [this.opts.network] })));
     }
     const eff = effectiveCombinations({ coordinators, network: this.opts.network, events: all() });
     const parties = [...new Set(eff.entries.flatMap((e) => [e.shopper, e.escrow]))];
     if (parties.length) {
       fetched.push(
-        ...(await t.query(relays, { kinds: [KIND.shopperProfile, KIND.escrowProfile], authors: parties })),
+        ...(await ask({ kinds: [KIND.shopperProfile, KIND.escrowProfile], authors: parties })),
       );
     }
     const events = all();

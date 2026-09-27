@@ -25,6 +25,7 @@ export { KIND, tagValue, tagValues, type NostrEvent, type EventTemplate } from '
 export * from './nostr/giftwrap.js';
 export * from './nostr/messages.js';
 export * from './nostr/transport.js';
+export { MappedTransport } from './nostr/mapped-transport.js';
 export { Messenger, MAX_PEER_RELAYS, BACKLOG_LIMIT, rewrap, type IncomingMessage, type MessengerOptions, type Acceptance, type AcceptFn } from './nostr/messenger.js';
 export { BODY_SCHEMAS, parseBody, innerBodyAs, REQUEST_LIMITS, requestItemsProblem } from './nostr/schema.js';
 

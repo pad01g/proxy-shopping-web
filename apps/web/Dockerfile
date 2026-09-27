@@ -5,6 +5,7 @@ WORKDIR /src
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/core/package.json packages/core/
 COPY apps/web/package.json apps/web/
+COPY apps/demo/package.json apps/demo/
 RUN npm ci --no-audit --no-fund
 COPY packages/core packages/core
 COPY apps/web apps/web
