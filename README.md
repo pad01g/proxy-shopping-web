@@ -27,7 +27,8 @@ docker run -p 8080:80 -v $PWD/config.json:/usr/share/nginx/html/config.json:ro p
 ```
 
 Mounting `../proxy-shopping-go` read-only lets the unit tests check `docs/test-vectors.json`
-and `lab/keys/public.json`; without it those tests are skipped.
+and `lab/keys/public.json`. Without the vectors file `npm test` fails, so CI cannot pass silently;
+set `SKIP_VECTORS=1` to run the other tests without it.
 
 ## @proxy-shopping/core
 
@@ -52,12 +53,27 @@ Entry points: `@proxy-shopping/core` (portable), `/node` (+ `FileStorage`), `/br
 - The mnemonic is stored in the origin's IndexedDB encrypted with a passphrase (PBKDF2-SHA256, 600k iterations,
   AES-GCM via WebCrypto); plaintext only if the user explicitly opts out at onboarding. WebCrypto needs a secure
   context (https or localhost) — `scripts/e2e-web.sh` forwards localhost:8080 in the browser container for that.
-- Funds never move without a click and an in-page confirmation (fund, release, countersign, refunds). The shopper's
-  cooperative refund is shown for review, never auto-signed. Terminal states (`completed`, `settled`) wait for the
-  chain (BTC `/tx/{txid}/outspend/{vout}`, USDC Safe balance 0 + receipt).
+- Funds never move without a click and an in-page confirmation (fund, resume funding, release, countersign, refunds).
+  The shopper's cooperative refund is shown for review, never auto-signed. Terminal states (`completed`, `settled`,
+  `refunded`) wait for the chain, also after our own broadcast (BTC `/tx/{txid}/outspend/{vout}`; USDC: Safe balance
+  below lock_amount and a receipt with a Transfer out of the Safe — anyone can send dust to a Safe, §4.8).
+- Funding persists every transaction before it is sent (BTC txid + raw tx; EVM: signed locally, hash + raw tx
+  stored, then sent), so an interrupted funding is resumed with the same transactions, never paid twice.
+- The escrow opens a case only when a notice / dispute names a request whose request + quote recompute to the funded
+  output (P2WSH, or the Safe with its owners / module configuration) on chain (§4.7); its ruling fee is exactly
+  `dispute_fee_bps` of what is split, and it owes rulings only for upfront fees ≥ its own published minimum.
 - `config.json` fields beyond the endpoints: `timelock_policy` (§4.5.1; names as in `proxy-shopping-go/lab/web-config.json`,
-  spec defaults when absent), `allow_private_endpoints` (lab only: http/ws and private hosts), `max_fee_rate` (sat/vB, default 50).
+  spec defaults when absent), `max_clock_skew_seconds` (§4.5.1: largest accepted difference between the chain's clock —
+  BTC tip header time, EVM latest block time — and ours, default 7200; the lab sets 315360000 because anvil's time is
+  warped), `allow_private_endpoints` (lab only: http/ws and private hosts), `max_fee_rate` (sat/vB, default 50).
   Endpoints must otherwise be https / wss; relays from peers' kind 10050 are limited to 8 public wss relays.
+- Messaging (§4.10): 120 messages / min per sender after EOSE, 60 / min for all non-counterparty senders together,
+  higher per-sender limits for the stored backlog (older pages are read when the first 1000 wraps are full);
+  messages no attached role accepts are neither stored nor acked. Sends go to k (2) inbox relays, the next ones
+  only when one fails; resends 1, 2, 4, 8, … get a fresh wrap. A signed inner is at most 28000 bytes (§4.9);
+  dispute evidence is split over several messages.
+- The Safe address is predicted with the factory's `proxyCreationCode` only if its keccak256 is a known Safe v1.4.1
+  build (the lab's and the canonical one, `KNOWN_PROXY_CREATION_CODE_HASHES`).
 - Only one tab runs the protocol at a time (Web Locks, BroadcastChannel fallback).
 - `apps/web/nginx.conf` sets CSP, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, `X-Frame-Options`;
   HSTS belongs to the TLS terminator. Production builds have no source maps.

@@ -14,6 +14,8 @@ export class MemoryChain implements ChainApi {
   private spentBy = new Map<string, { txid: string; vin: number }>();
   /** Fee estimate returned by feeEstimates() for target 6 (tests can raise it). */
   feeRate = 1;
+  /** Seconds the tip block's time is ahead of (or, negative, behind) the wall clock. */
+  clockOffset = 0;
 
   /** Credit `address` with a fake coinbase-like output. */
   fund(address: string, value: number): string {
@@ -68,6 +70,10 @@ export class MemoryChain implements ChainApi {
 
   async tipHeight(): Promise<number> {
     return this.height;
+  }
+
+  async tipTime(): Promise<number> {
+    return Math.floor(Date.now() / 1000) + this.clockOffset;
   }
 
   async txStatus(txid: string): Promise<TxStatus> {

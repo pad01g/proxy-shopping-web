@@ -49,10 +49,10 @@ export function crossCheckDeployments(d: Deployments, listEvm: NonNullable<NonNu
     ['safe.factory', d.safe.factory, listEvm.safe?.factory],
     ['safe.fallback_handler', d.safe.fallback_handler, listEvm.safe?.fallback_handler],
     ['safe.multisend_call_only', d.safe.multisend_call_only, listEvm.safe?.multisend_call_only],
+    // The module holds the timelock paths and setup enables it: a list that does not vouch for them is not enough.
+    ['module', d.module, listEvm.safe?.module],
+    ['setup', d.setup, listEvm.safe?.setup],
   ];
-  // module / setup are optional in the list; compare when present.
-  if (listEvm.safe?.module) pairs.push(['module', d.module, listEvm.safe.module]);
-  if (listEvm.safe?.setup) pairs.push(['setup', d.setup, listEvm.safe.setup]);
   for (const [name, ours, theirs] of pairs) if (!same(ours, theirs)) problems.push(`${name} ${ours} differs from the operator list (${theirs ?? 'missing'})`);
   return problems;
 }

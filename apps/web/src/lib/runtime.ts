@@ -82,6 +82,7 @@ export async function createRuntime(config: AppConfig, identity: Identity): Prom
     config: {
       network: config.network, relays: config.relays, coordinators: config.coordinators,
       timelockPolicy: config.timelock_policy, allowPrivateEndpoints: !!config.allow_private_endpoints, maxFeeRate: config.max_fee_rate,
+      maxClockSkewSeconds: config.max_clock_skew_seconds,
     },
     chain,
     evm,

@@ -5,7 +5,7 @@ import type { RateSource } from '../fx/types.js';
 import type { KeySet } from '../keys/derive.js';
 import { LocalSigner, type IdentitySigner } from '../keys/signer.js';
 import { tagValue } from '../nostr/kinds.js';
-import { Messenger } from '../nostr/messenger.js';
+import { Messenger, type Acceptance, type AcceptFn } from '../nostr/messenger.js';
 import { unique, type NostrTransport, type PublishResult } from '../nostr/transport.js';
 import { ScopedStorage, type Storage } from '../storage/types.js';
 import { TrustDirectory } from '../trust/directory.js';
@@ -28,6 +28,8 @@ export interface SessionConfig {
   allowPrivateEndpoints?: boolean;
   /** Cap for the BTC funding fee rate in sat/vB (default 50). */
   maxFeeRate?: number;
+  /** Largest accepted difference between the chain's clock and ours, in seconds (§4.5.1, default 2 h). */
+  maxClockSkewSeconds?: number;
 }
 
 export interface SessionOptions {
@@ -60,6 +62,7 @@ export class Session {
   rates: RateSource[];
   private cfg: SessionConfig;
   private pubkeyValue?: string;
+  private readonly acceptors = new Set<AcceptFn>();
 
   constructor(opts: SessionOptions) {
     this.keys = opts.keys;
@@ -78,6 +81,7 @@ export class Session {
       k: this.cfg.k,
       retryIntervalMs: this.cfg.retryIntervalMs,
       allowPrivateRelays: this.cfg.allowPrivateEndpoints,
+      accepts: (inner, meta) => this.classify(inner, meta),
     });
     this.directory = new TrustDirectory({
       transport: this.transport,
@@ -86,6 +90,22 @@ export class Session {
       relays: () => this.cfg.relays,
       coordinators: () => this.cfg.coordinators,
     });
+  }
+
+  /**
+   * Register a role's view of incoming messages (§4.10); returns the unregister function. A session with
+   * no registered role (e.g. a test shopper listening on the messenger directly) accepts everything.
+   */
+  addAcceptor(fn: AcceptFn): () => void {
+    this.acceptors.add(fn);
+    return () => this.acceptors.delete(fn);
+  }
+
+  /** The most favourable verdict of the attached roles: a counterparty for one role is a counterparty. */
+  private async classify(...args: Parameters<AcceptFn>): Promise<Acceptance> {
+    if (!this.acceptors.size) return 'counterparty';
+    const verdicts = await Promise.all([...this.acceptors].map((fn) => Promise.resolve(fn(...args)).catch((): Acceptance => 'reject')));
+    return verdicts.includes('counterparty') ? 'counterparty' : verdicts.includes('stranger') ? 'stranger' : 'reject';
   }
 
   get config(): SessionConfig {

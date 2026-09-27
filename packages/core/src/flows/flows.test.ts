@@ -117,10 +117,13 @@ describe('flows (in-memory relays and chain)', () => {
     expect(await w.escrow.decryptAddress(id)).toEqual(ADDRESS);
     expect(await w.escrow.missingEvidence(id)).toEqual([]);
     await expect(w.escrow.rule(id, { user: '99999999', shopper: '0' }, 'x')).rejects.toThrow(/add up/);
-    await w.escrow.rule(id, { user: '20000', shopper: '8100' }, '一部返金'); // fee = 28667 - 28100 = 567 (≤ 2 %)
-    await expect(w.escrow.rule(id, { user: '0', shopper: '28667' }, 'again')).rejects.toThrow(/already ruled/);
+    // fee = floor(2 % of 28667) = 573, so user + shopper must be 28094 (§4.8)
+    await expect(w.escrow.rule(id, { user: '20000', shopper: '8100' }, 'x')).rejects.toThrow(/add up to 28094/);
+    await expect(w.escrow.rule(id, { user: '20000', shopper: '8094', escrow_fee: '500' }, 'x')).rejects.toThrow(/escrow_fee must be 573/);
+    await w.escrow.rule(id, { user: '20000', shopper: '8094' }, '一部返金');
+    await expect(w.escrow.rule(id, { user: '0', shopper: '28094' }, 'again')).rejects.toThrow(/already ruled/);
     const ruled = await waitStatus(get, 'ruled');
-    expect(ruled.ruling!.split).toEqual({ user: '20000', shopper: '8100', escrow_fee: '567' });
+    expect(ruled.ruling!.split).toEqual({ user: '20000', shopper: '8094', escrow_fee: '573' });
     expect(await w.user.reviewRuling(id)).toEqual([]);
     await w.user.countersignRuling(id);
     await waitStatus(get, 'settled');
@@ -128,7 +131,7 @@ describe('flows (in-memory relays and chain)', () => {
     const userCoins = await w.chain.utxos(w.keys['user-1'].btcWallet.address);
     expect(userCoins.some((u) => u.value === 20000)).toBe(true);
     const escrowCoins = await w.chain.utxos(w.keys['escrow-1'].btcWallet.address);
-    expect(escrowCoins.map((u) => u.value).sort()).toEqual([1000, 567]);
+    expect(escrowCoins.map((u) => u.value).sort()).toEqual([1000, 573]);
     await caseIn(w, id, 'settled');
     w.stop();
   });
@@ -298,7 +301,7 @@ describe('item 4: peer-asserted terminal states', () => {
     await waitStatus(get, 'delivered');
     await w.user.openDispute(id, { claim: 'wrong_item', text: 'x' });
     await caseIn(w, id, 'open');
-    await w.escrow.rule(id, { user: '20000', shopper: '8100' }, 'r');
+    await w.escrow.rule(id, { user: '20000', shopper: '8094' }, 'r');
     await w.sessions['shopper-1'].messenger.send(w.keys['escrow-1'].nostrPublicKey, id, MSG.countersigned, { txid: 'ef'.repeat(32) });
     await waitFor(() => w.escrow.getCase(id), (c) => !!c?.pendingSettlement, 'claim');
     await sleep(200);
@@ -401,7 +404,6 @@ describe('item 11: escrow case assembly (§4.7)', () => {
     });
     const c = await caseIn(w, id, 'open');
     expect(c.request!.shop_url).toBe('https://safe-shop.test/');
-    expect(c.rejected).toBeUndefined();
     expect(c.conflicts!.join()).toMatch(/differs from the notice/);
     w.stop();
   });

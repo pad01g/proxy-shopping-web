@@ -7,7 +7,7 @@ import { MemoryRelayNetwork } from '../testing/memory-transport.js';
 import { sleep } from '../util/time.js';
 import { giftWrap, isValidInner, plainEvent, signInner, unwrap } from './giftwrap.js';
 import { KIND } from './kinds.js';
-import { Messenger, type IncomingMessage } from './messenger.js';
+import { BACKLOG_LIMIT, Messenger, rewrap, type IncomingMessage } from './messenger.js';
 import type { NostrTransport } from './transport.js';
 
 const RELAYS = ['wss://relay-1.test', 'wss://relay-2.test'];
@@ -58,8 +58,10 @@ describe('gift wrap (§4.1)', () => {
     const ack = await signInner(alice, { recipient: alice.pubkey, orderId: '', type: 'ack', body: { ids: [] } });
     expect(ack.tags.some((t) => t[0] === 'o')).toBe(false);
     expect(isValidInner(ack)).toBe(true);
-    const chat = await signInner(alice, { recipient: alice.pubkey, orderId: '', type: 'chat', body: { text: 'x' } });
-    expect(isValidInner(chat)).toBe(false);
+    // §4.10: every other type needs a non-empty o tag; we refuse to sign one that the peer would drop.
+    await expect(signInner(alice, { recipient: alice.pubkey, orderId: '', type: 'report', body: { text: 'x' } })).rejects.toThrow(/order id/);
+    const emptyO = await alice.signEvent({ kind: KIND.inner, created_at: 1, tags: [['p', alice.pubkey], ['o', ''], ['t', 'chat']], content: '{}' });
+    expect(isValidInner(emptyO)).toBe(false);
   });
 
   it('detects tampering with an inner', async () => {
@@ -181,24 +183,7 @@ describe('Messenger (§4.2)', () => {
     b.stop();
   });
 
-  it('does not rate limit the stored backlog, only messages that arrive after EOSE', async () => {
-    const net = new MemoryRelayNetwork();
-    const a = new Messenger({ signer: new LocalSigner(generateSecretKey()), transport: net.transport(), storage: new MemoryStorage(), relays: RELAYS });
-    const b = new Messenger({ signer: new LocalSigner(generateSecretKey()), transport: net.transport(), storage: new MemoryStorage(), relays: RELAYS, maxPerSenderPerMinute: 3 });
-    // a fresh device restoring from its mnemonic: everything on the relays is new to it
-    for (let i = 0; i < 6; i++) await a.send(await b.pubkey(), ORDER, 'chat', { text: `old ${i}` });
-    const got: string[] = [];
-    b.on('message', (m) => got.push(m.inner.id));
-    await b.start();
-    await sleep(100);
-    expect(got).toHaveLength(6);
-    for (let i = 0; i < 6; i++) await a.send(await b.pubkey(), ORDER, 'chat', { text: `new ${i}` });
-    await sleep(100);
-    expect(got).toHaveLength(9);
-    b.stop();
-  });
-
-  it('does not rate limit the stored backlog, only messages that arrive after EOSE', async () => {
+  it('applies the per-minute limit only after EOSE (the stored backlog has a higher one)', async () => {
     const net = new MemoryRelayNetwork();
     const a = new Messenger({ signer: new LocalSigner(generateSecretKey()), transport: net.transport(), storage: new MemoryStorage(), relays: RELAYS });
     const b = new Messenger({ signer: new LocalSigner(generateSecretKey()), transport: net.transport(), storage: new MemoryStorage(), relays: RELAYS, maxPerSenderPerMinute: 3 });
@@ -252,5 +237,133 @@ describe('Messenger (§4.2)', () => {
   it('allows private relays only when configured (lab)', () => {
     const lab = new Messenger({ signer: new LocalSigner(generateSecretKey()), transport: new MemoryRelayNetwork().transport(), storage: new MemoryStorage(), relays: RELAYS, allowPrivateRelays: true });
     expect(lab.usableRelays(['ws://relay:8080', 'wss://127.0.0.1'])).toEqual(['ws://relay:8080', 'wss://127.0.0.1']);
+  });
+});
+
+describe('Messenger limits and delivery (second review, §4.2, §4.10)', () => {
+  const mk = (net: MemoryRelayNetwork, opts: Partial<ConstructorParameters<typeof Messenger>[0]> = {}) =>
+    new Messenger({ signer: new LocalSigner(generateSecretKey()), transport: net.transport(), storage: new MemoryStorage(), relays: RELAYS, ...opts });
+
+  it('caps messages from strangers together, on top of the per-sender limit', async () => {
+    const net = new MemoryRelayNetwork();
+    const b = mk(net, { maxStrangersPerMinute: 3, accepts: () => 'stranger' });
+    const got: string[] = [];
+    b.on('message', (m) => got.push(m.inner.id));
+    await b.start();
+    await sleep(20); // EOSE: live from here
+    for (let s = 0; s < 3; s++) {
+      const a = mk(net);
+      for (let i = 0; i < 2; i++) await a.send(await b.pubkey(), ORDER, 'chat', { text: `${s}/${i}` });
+    }
+    await sleep(100);
+    expect(got).toHaveLength(3);
+    b.stop();
+  });
+
+  it('neither stores nor acks what no role accepts', async () => {
+    const net = new MemoryRelayNetwork();
+    const a = mk(net);
+    const b = mk(net, { accepts: () => 'reject' });
+    const got: string[] = [];
+    const dropped: string[] = [];
+    b.on('message', (m) => got.push(m.inner.id));
+    b.on('dropped', (d) => dropped.push(d.reason));
+    await a.start();
+    await b.start();
+    const inner = await a.send(await b.pubkey(), ORDER, 'chat', { text: 'x' });
+    await until(() => dropped.length > 0);
+    await sleep(50);
+    expect(got).toEqual([]);
+    expect(await b.inbox()).toEqual([]);
+    expect(await a.isAcked(inner.id)).toBe(false);
+    a.stop();
+    b.stop();
+  });
+
+  it('limits the stored backlog too, with a higher per-sender limit', async () => {
+    const net = new MemoryRelayNetwork();
+    const a = mk(net);
+    const b = mk(net, { maxPerSenderPerMinute: 2, maxBacklogPerSender: 4 });
+    for (let i = 0; i < 6; i++) await a.send(await b.pubkey(), ORDER, 'chat', { text: `old ${i}` });
+    const got: string[] = [];
+    b.on('message', (m) => got.push(m.inner.id));
+    await b.start();
+    await sleep(100);
+    expect(got).toHaveLength(4);
+    b.stop();
+  });
+
+  it('changing relays does not open a new unlimited catch-up window', async () => {
+    const net = new MemoryRelayNetwork();
+    const a = mk(net);
+    const b = mk(net, { maxPerSenderPerMinute: 3, maxBacklogPerSender: 100 });
+    const got: string[] = [];
+    b.on('message', (m) => got.push(m.inner.id));
+    await b.start();
+    await sleep(20);
+    for (let i = 0; i < 6; i++) await a.send(await b.pubkey(), ORDER, 'chat', { text: String(i) });
+    await sleep(50);
+    expect(got).toHaveLength(3);
+    // The relays replay all six stored wraps to the new subscription: still live, still limited.
+    b.setRelays([...RELAYS]);
+    await sleep(100);
+    expect(got).toHaveLength(3);
+    b.stop();
+  });
+
+  it('reads older pages when a flood fills the first page of stored wraps', async () => {
+    const net = new MemoryRelayNetwork();
+    const a = mk(net);
+    const b = mk(net);
+    const bPk = await b.pubkey();
+    const inner = await a.send(bPk, ORDER, 'chat', { text: 'the real one' });
+    // 1000 newer junk wraps for b (not decryptable): the first page of the subscription holds only those.
+    for (let i = 0; i < BACKLOG_LIMIT; i++) {
+      const junk = finalizeEvent({ kind: KIND.giftWrap, created_at: inner.created_at + 10 + i, tags: [['p', bPk]], content: 'x' }, generateSecretKey());
+      await net.transport().publish(['wss://relay-1.test'], junk);
+    }
+    const got: string[] = [];
+    b.on('message', (m) => got.push(m.inner.id));
+    await b.start();
+    await until(() => got.length > 0, 8000);
+    expect(got).toEqual([inner.id]);
+    b.stop();
+  });
+
+  it('gives resends 1, 2, 4, 8 a fresh wrap', async () => {
+    expect([1, 2, 3, 4, 5, 8, 12, 16].map(rewrap)).toEqual([true, true, false, true, false, true, false, true]);
+    const net = new MemoryRelayNetwork();
+    const wraps = new Set<string>();
+    const t = net.transport();
+    const a = new Messenger({
+      signer: new LocalSigner(generateSecretKey()), storage: new MemoryStorage(), relays: RELAYS, retryIntervalMs: 50,
+      transport: { ...t, publish: (relays, e) => { if (e.kind === KIND.giftWrap) wraps.add(e.id); return t.publish(relays, e); } },
+    });
+    const b = mk(net);
+    await a.start();
+    const inner = await a.send(await b.pubkey(), ORDER, 'chat', { text: 'x' });
+    net.relays.clear(); // lost by the relays: only a resend can deliver it
+    await b.start();
+    await until(() => a.isAcked(inner.id), 8000);
+    expect(wraps.size).toBeGreaterThan(1);
+    a.stop();
+    b.stop();
+  });
+
+  it('sends to k relays of the inbox, and to the next one only when one fails (§4.2)', async () => {
+    const net = new MemoryRelayNetwork();
+    const calls: string[][] = [];
+    const t = net.transport();
+    const a = new Messenger({
+      signer: new LocalSigner(generateSecretKey()), storage: new MemoryStorage(), relays: RELAYS,
+      transport: { ...t, publish: (relays, e) => { if (e.kind === KIND.giftWrap) calls.push(relays); return t.publish(relays, e); } },
+    });
+    const bSk = generateSecretKey();
+    const inbox = ['wss://r1.test', 'wss://r2.test', 'wss://r3.test', 'wss://r4.test'];
+    await net.transport().publish(RELAYS, finalizeEvent({ kind: KIND.inboxRelays, created_at: 1, tags: inbox.map((r) => ['relay', r]), content: '' }, bSk));
+    net.down.add('wss://r1.test');
+    await a.send(getPublicKey(bSk), ORDER, 'chat', { text: 'x' });
+    expect(calls).toEqual([['wss://r1.test', 'wss://r2.test'], ['wss://r3.test']]);
+    expect(net.relays.has('wss://r4.test')).toBe(false);
   });
 });

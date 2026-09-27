@@ -31,6 +31,7 @@ describe.skipIf(!!skip)('end-to-end flows over relay + bitcoind + anvil', () => 
       relays: [ENV.relay!],
       transport: () => new PoolTransport(),
       chain,
+      deployments: d,
     });
     // EVM clients need ETH/USDC first, so attach them after the world exists.
     for (const name of ['user-1', 'shopper-1', 'escrow-1'] as const) {
@@ -105,13 +106,53 @@ describe.skipIf(!!skip)('end-to-end flows over relay + bitcoind + anvil', () => 
     }
     expect(await world.escrow.decryptAddress(id)).toEqual(ADDRESS);
     const lock = BigInt((await world.user.getOrder(id))!.quote!.lock_amount!);
-    await world.escrow.rule(id, { user: String(lock / 2n), shopper: String(lock / 2n - 100_000n) }, '半額返金');
+    const fee = (lock * 200n) / 10000n; // dispute_fee_bps of escrow-1
+    await world.escrow.rule(id, { user: String(lock / 2n), shopper: String(lock - fee - lock / 2n) }, '半額返金');
     await wait(id, 'ruled');
     expect(await world.user.reviewRuling(id)).toEqual([]);
     const userEvm = world.sessions['user-1'].evm!;
     const before = await userEvm.usdcBalance();
     await world.user.countersignRuling(id);
     expect((await userEvm.usdcBalance()) - before).toBe(lock / 2n);
+  });
+
+  /** Anyone can send USDC to a Safe (§4.8): 1 unit from a stranger. */
+  async function dust(id: string) {
+    const safe = ((await world.user.getOrder(id))!.funded as { safe: `0x${string}` }).safe;
+    const stranger = await fundedEvm(ENV.anvil!, d!, KeySet.fromMnemonic(LAB_MNEMONICS['operator-1']), 10n);
+    await stranger.transferUsdc(safe, 1n);
+    return safe;
+  }
+
+  it('USDC dust: 1 unit sent to the Safe blocks neither the release nor its settlement check', async () => {
+    const id = await order('usdc-evm');
+    const safe = await dust(id);
+    await world.user.release(id);
+    const done = await wait(id, 'completed');
+    // release moves lock_amount; the dust stays in the Safe
+    expect(await world.sessions['user-1'].evm!.usdcBalance(safe)).toBe(1n);
+    expect(done.escrowSpent?.txid).toBe(done.completedTxid);
+  });
+
+  it('USDC dust: the ruling splits the balance at signing and is still countersignable after more dust', async () => {
+    const id = await order('usdc-evm');
+    const safe = await dust(id);
+    await world.user.openDispute(id, { claim: 'wrong_item', text: 'dust' });
+    const end = Date.now() + 20_000;
+    while ((await world.escrow.getCase(id))?.status !== 'open') {
+      if (Date.now() > end) throw new Error('case not opened');
+      await sleep(100);
+    }
+    const lock = BigInt((await world.user.getOrder(id))!.quote!.lock_amount!);
+    const terms = await world.escrow.rulingTerms(id);
+    expect(terms.distributable).toBe(lock + 1n);
+    await world.escrow.rule(id, { user: String(lock / 2n), shopper: String(terms.distributable - terms.fee - lock / 2n) }, 'dust');
+    await wait(id, 'ruled');
+    await dust(id); // arrives after the escrow signed: total (lock + 1) ≤ balance (lock + 2)
+    expect(await world.user.reviewRuling(id)).toEqual([]);
+    await world.user.countersignRuling(id);
+    await wait(id, 'settled');
+    expect(await world.sessions['user-1'].evm!.usdcBalance(safe)).toBe(1n);
   });
 
   it('BTC dispute: ruling PSBT countersigned by the user is accepted by bitcoind', async () => {
@@ -122,12 +163,17 @@ describe.skipIf(!!skip)('end-to-end flows over relay + bitcoind + anvil', () => 
       if (Date.now() > end) throw new Error('case not opened');
       await sleep(100);
     }
-    await world.escrow.rule(id, { user: '20000', shopper: '8100' }, '一部返金'); // fee 567 ≤ dispute_fee_bps 2 %
+    await world.escrow.rule(id, { user: '20000', shopper: '8094' }, '一部返金'); // fee = floor(2 % of 28667) = 573
     await wait(id, 'ruled');
     expect(await world.user.reviewRuling(id)).toEqual([]);
     const settled = await world.user.countersignRuling(id);
-    await sleep(1500);
-    const st = await world.sessions['user-1'].chain!.txStatus(settled.settledTxid!);
+    // the test miner mines every 500 ms when the mempool is non-empty; allow for a slow block
+    const mined = Date.now() + 20_000;
+    let st = await world.sessions['user-1'].chain!.txStatus(settled.settledTxid!);
+    while (!st.confirmed && Date.now() < mined) {
+      await sleep(250);
+      st = await world.sessions['user-1'].chain!.txStatus(settled.settledTxid!);
+    }
     expect(st.confirmed).toBe(true);
   });
 });

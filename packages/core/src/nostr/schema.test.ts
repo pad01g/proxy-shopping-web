@@ -19,7 +19,7 @@ describe('message schemas (§4.10)', () => {
     expect(quote).not.toHaveProperty('extra_field');
     expect(parseBody(MSG.funded, { asset: 'btc-signet', txid: H('a'), amount: '1' })).toEqual({ asset: 'btc-signet', txid: H('a'), vout: 0, amount: '1', fee_txid: '' });
     const payout = parseBody<{ safe_tx: { operation: string } }>(MSG.release, {
-      asset: 'usdc-evm', signature: `0x${'1'.repeat(130)}`,
+      asset: 'usdc-evm', signature: `0x${'1'.repeat(128)}1b`,
       safe_tx: { to: `0x${'2'.repeat(40)}`, value: '0', data: '0x', operation: 1, safeTxGas: '0', baseGas: '0', gasPrice: '0', gasToken: `0x${'0'.repeat(40)}`, refundReceiver: `0x${'0'.repeat(40)}`, nonce: '0' },
     });
     expect(payout?.safe_tx.operation).toBe('1');
@@ -52,5 +52,28 @@ describe('message schemas (§4.10)', () => {
     expect(parseBody(MSG.request, { ...req, key_proof: 'ab'.repeat(64), delivery: { ...req.delivery, key_for_escrow_sha256: undefined } })).toBeUndefined();
     // over-long strings
     expect(parseBody(MSG.chat, { text: 'x'.repeat(5000) })).toBeUndefined();
+  });
+
+  it('enforces the §4.10 request limits and spec hex (second review, item 18)', () => {
+    const req = {
+      shop_url: 'https://safe-shop.test/', shop_region: 'JP-13', items: [{ sku: 'A', qty: 1 }], payment: 'btc-signet',
+      escrow: H('e'), operator: H('0'), coordinator: H('c'), relays: [], key_proof: 'ab'.repeat(64),
+      delivery: { ciphertext: 'AAAA', key_for_shopper: 'x', key_for_escrow_sha256: H('f') },
+    };
+    expect(parseBody(MSG.request, req)).toBeDefined();
+    expect(parseBody(MSG.request, { ...req, items: Array.from({ length: 20 }, () => ({ sku: 'A', qty: 99 })) })).toBeDefined();
+    expect(parseBody(MSG.request, { ...req, items: Array.from({ length: 21 }, () => ({ sku: 'A', qty: 1 })) })).toBeUndefined();
+    expect(parseBody(MSG.request, { ...req, items: [{ sku: 'A', qty: 100 }] })).toBeUndefined();
+    expect(parseBody(MSG.request, { ...req, items: [{ sku: 'A', qty: 0 }] })).toBeUndefined();
+    expect(parseBody(MSG.request, { ...req, items: [{ sku: 'あ'.repeat(21), qty: 1 }] })).toBeDefined(); // 63 bytes
+    expect(parseBody(MSG.request, { ...req, items: [{ sku: 'あ'.repeat(22), qty: 1 }] })).toBeUndefined(); // 66 bytes
+    expect(parseBody(MSG.request, { ...req, key_proof: 'AB'.repeat(64) })).toBeUndefined();
+    expect(parseBody(MSG.request, { ...req, key_proof: `0x${'ab'.repeat(65)}` })).toBeUndefined();
+    expect(parseBody(MSG.request, { ...req, key_proof: 'ab'.repeat(65) })).toBeDefined();
+    // Safe signatures must have v = 27 / 28: v = 0 / 1 mean contract / approved-hash signatures to the Safe
+    const safe_tx = { to: `0x${'2'.repeat(40)}`, value: '0', data: '0x', operation: '0', safeTxGas: '0', baseGas: '0', gasPrice: '0', gasToken: `0x${'0'.repeat(40)}`, refundReceiver: `0x${'0'.repeat(40)}`, nonce: '0' };
+    for (const v of ['1b', '1c']) expect(parseBody(MSG.release, { asset: 'usdc-evm', safe_tx, signature: `0x${'1'.repeat(128)}${v}` })).toBeDefined();
+    for (const v of ['00', '01', '1d']) expect(parseBody(MSG.release, { asset: 'usdc-evm', safe_tx, signature: `0x${'1'.repeat(128)}${v}` })).toBeUndefined();
+    expect(parseBody(MSG.release, { asset: 'usdc-evm', safe_tx: { ...safe_tx, value: '0x10' }, signature: `0x${'1'.repeat(128)}1b` })).toBeUndefined();
   });
 });

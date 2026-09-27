@@ -27,6 +27,8 @@ export interface ChainApi {
   txHex(txid: string): Promise<string>;
   broadcast(txHex: string): Promise<string>;
   tipHeight(): Promise<number>;
+  /** Header time of the tip block (UNIX seconds), to compare the chain's clock with ours (§4.5.1). */
+  tipTime(): Promise<number>;
   txStatus(txid: string): Promise<TxStatus>;
   /** Whether output `vout` of `txid` is spent, and by which transaction (§4.8 settlement checks). */
   outspend(txid: string, vout: number): Promise<Outspend>;
@@ -68,6 +70,14 @@ export class EsploraClient implements ChainApi {
     const h = Number((await (await this.get('/blocks/tip/height')).text()).trim());
     if (!Number.isSafeInteger(h) || h < 0) throw new Error('esplora: bad tip height');
     return h;
+  }
+
+  async tipTime(): Promise<number> {
+    const hash = (await (await this.get('/blocks/tip/hash')).text()).trim();
+    if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error('esplora: bad tip hash');
+    const t = Number(((await (await this.get(`/block/${hash}`)).json()) as { timestamp?: unknown }).timestamp);
+    if (!Number.isSafeInteger(t) || t <= 0) throw new Error('esplora: bad block timestamp');
+    return t;
   }
 
   async outspend(txid: string, vout: number): Promise<Outspend> {

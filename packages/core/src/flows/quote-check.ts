@@ -64,6 +64,8 @@ export function escrowUpfrontMinimum(esc: EscrowProfileContent, asset: string, l
 }
 
 const DECIMALS = { 'btc-signet': 8, 'usdc-evm': 6 } as const;
+/** Smallest standard P2WPKH output (sats). */
+export const BTC_DUST_SATS = 546n;
 const sameAddr = (a?: string, b?: string) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
 
 /**
@@ -93,9 +95,16 @@ export async function checkQuote(p: QuoteCheckInput): Promise<QuoteCheck> {
   const esc = p.escrowProfile;
   if (!esc) errors.push('escrow profile unknown');
   const t = quote.timelock;
-  errors.push(...checkTimelock({
-    asset: request.payment, timelock: t, chainNow: p.chainNow, deliveryDays: p.deliveryDays ?? 0, policy: p.timelockPolicy,
-  }));
+  // The default min_t1 is delivery_days + 14 days; without the shopper's profile it cannot be computed
+  // (0 would silently weaken it). A policy with an explicit min_t1 does not need it.
+  const policyMinT1 = request.payment === 'btc-signet' ? p.timelockPolicy?.btc_min_t1_blocks : p.timelockPolicy?.evm_min_t1_seconds;
+  if (p.deliveryDays === undefined && policyMinT1 === undefined) {
+    errors.push('shopper profile unknown: cannot check the timelock against delivery_days');
+  } else {
+    errors.push(...checkTimelock({
+      asset: request.payment, timelock: t, chainNow: p.chainNow, deliveryDays: p.deliveryDays ?? 0, policy: p.timelockPolicy,
+    }));
+  }
   if (!quote.lock_amount || !/^\d+$/.test(quote.lock_amount)) errors.push('invalid lock_amount');
 
   if (request.payment === 'btc-signet' && esc && t) {
@@ -166,7 +175,9 @@ export async function checkQuote(p: QuoteCheckInput): Promise<QuoteCheck> {
     try {
       const fee = parseUnits(quote.escrow_upfront_fee ?? '0');
       const required = escrowUpfrontMinimum(esc, request.payment, lock);
-      if (fee > required * 2n) errors.push(`escrow upfront fee ${fee} is more than twice the escrow's terms (${required})`);
+      // A BTC fee output below the dust limit would make the funding transaction non-standard.
+      if (request.payment === 'btc-signet' && fee > 0n && fee < BTC_DUST_SATS) errors.push(`escrow upfront fee ${fee} sats is below the dust limit ${BTC_DUST_SATS}`);
+      else if (fee > required * 2n) errors.push(`escrow upfront fee ${fee} is more than twice the escrow's terms (${required})`);
       else if (fee < required) warnings.push(`escrow upfront fee ${fee} is below the escrow's minimum ${required}: it owes no ruling`);
     } catch (err) {
       errors.push(`cannot check escrow upfront fee: ${(err as Error).message}`);

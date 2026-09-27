@@ -1,4 +1,4 @@
-import type { Offer, Payment } from '@proxy-shopping/core/browser';
+import { REQUEST_LIMITS, requestItemsProblem, type Offer, type Payment } from '@proxy-shopping/core/browser';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ActionButton, ErrorText, Field, Mono, Section } from '../components/ui';
@@ -32,6 +32,9 @@ export function NewOrderPage() {
     if (!offer) throw new Error('組み合わせを選んでください');
     const clean = items.filter((i) => i.sku.trim() && i.qty > 0).map((i) => ({ sku: i.sku.trim(), qty: i.qty }));
     if (!clean.length) throw new Error('商品を入れてください');
+    // §4.10: at most 20 items, qty 1..99, SKU up to 64 bytes — the shopper drops anything else.
+    const problem = requestItemsProblem(clean);
+    if (problem) throw new Error(`商品の指定が上限を超えています: ${problem}`);
     if (!address.name || !address.address) throw new Error('届け先を入れてください');
     const order = await rt.user.createOrder({ offer, shopUrl, region, items: clean, payment, address });
     navigate(`/user/orders/${order.id}`);
@@ -59,13 +62,13 @@ export function NewOrderPage() {
         {items.map((it, i) => (
           <div className="row" key={i} data-testid="order-item-row">
             <input data-testid={`order-item-sku-${i}`} placeholder="SKU（例 A-100）" value={it.sku} onChange={(e) => setItems(items.map((x, j) => (j === i ? { ...x, sku: e.target.value } : x)))} />
-            <input data-testid={`order-item-qty-${i}`} type="number" min={1} style={{ maxWidth: 90 }} value={it.qty} onChange={(e) => setItems(items.map((x, j) => (j === i ? { ...x, qty: Number(e.target.value) } : x)))} />
+            <input data-testid={`order-item-qty-${i}`} type="number" min={1} max={REQUEST_LIMITS.qtyMax} style={{ maxWidth: 90 }} value={it.qty} onChange={(e) => setItems(items.map((x, j) => (j === i ? { ...x, qty: Number(e.target.value) } : x)))} />
             {items.length > 1 && (
               <button type="button" className="plain small" onClick={() => setItems(items.filter((_, j) => j !== i))}>削除</button>
             )}
           </div>
         ))}
-        <button type="button" className="plain" data-testid="order-item-add" onClick={() => setItems([...items, { sku: '', qty: 1 }])}>
+        <button type="button" className="plain" data-testid="order-item-add" disabled={items.length >= REQUEST_LIMITS.items} onClick={() => setItems([...items, { sku: '', qty: 1 }])}>
           商品を追加
         </button>
       </Section>

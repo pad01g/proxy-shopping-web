@@ -24,6 +24,8 @@ export async function signKeyProofEvm(account: LocalAccount, orderId: string, us
 }
 
 export function verifyKeyProofBtc(proofHex: string, userBtcPubkey33: string, orderId: string, userNostrPubkey: string): boolean {
+  // hex per spec: lower case, no prefix (other spellings of the same bytes are refused).
+  if (!/^[0-9a-f]{128}$/.test(proofHex)) return false;
   try {
     const pub = fromHex(userBtcPubkey33);
     if (pub.length !== 33) return false;
@@ -37,9 +39,9 @@ export function verifyKeyProofBtc(proofHex: string, userBtcPubkey33: string, ord
 
 export async function verifyKeyProofEvm(proofHex: string, evmAddress: string, orderId: string, userNostrPubkey: string): Promise<boolean> {
   try {
-    const clean = proofHex.startsWith('0x') ? proofHex.slice(2) : proofHex;
-    if (!/^[0-9a-fA-F]{130}$/.test(clean)) return false;
-    const signer = await recoverMessageAddress({ message: keyProofMessage(orderId, userNostrPubkey), signature: `0x${clean}` as Hex });
+    // Lower-case hex without 0x, v = 27 / 28.
+    if (!/^[0-9a-f]{128}(1b|1c)$/.test(proofHex)) return false;
+    const signer = await recoverMessageAddress({ message: keyProofMessage(orderId, userNostrPubkey), signature: `0x${proofHex}` as Hex });
     return signer.toLowerCase() === evmAddress.toLowerCase();
   } catch {
     return false;

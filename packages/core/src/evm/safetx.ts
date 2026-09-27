@@ -132,12 +132,22 @@ export function signSafeTx(account: LocalAccount, tx: SafeTx, chainId: number, s
   });
 }
 
+/**
+ * A 65-byte ECDSA signature with v = 27 / 28 (§6.4). Safe reads v = 0 as a contract signature and v = 1 as an
+ * approved hash, so a signature with such a v would recover to one address here and mean something else on chain.
+ */
+export function assertEcdsaSignature(signature: string): asserts signature is Hex {
+  if (!/^0x[0-9a-fA-F]{128}(1b|1c|1B|1C)$/.test(signature)) throw new Error('signature must be 65 bytes with v = 27 or 28');
+}
+
 export async function recoverSafeTxSigner(tx: SafeTx, chainId: number, safe: `0x${string}`, signature: Hex): Promise<`0x${string}`> {
+  assertEcdsaSignature(signature);
   return recoverAddress({ hash: safeTxHash(tx, chainId, safe), signature });
 }
 
 /** Concatenate signatures ordered by signer address ascending (§6.4). */
 export function packSignatures(sigs: Array<{ signer: `0x${string}`; signature: Hex }>): Hex {
+  for (const s of sigs) assertEcdsaSignature(s.signature);
   const sorted = [...sigs].sort((a, b) => (BigInt(a.signer) < BigInt(b.signer) ? -1 : 1));
   return concat(sorted.map((s) => s.signature));
 }
@@ -157,19 +167,30 @@ export function safeTxToJson(tx: SafeTx): SafeTxJson {
   };
 }
 
+/** §6.4: numbers are decimal strings. BigInt() alone would also take "0x10", " 1" or "-1". */
+function decimal(v: string, name: string): bigint {
+  if (typeof v !== 'string' || !/^\d{1,78}$/.test(v)) throw new Error(`SafeTx ${name} must be a non-negative decimal string`);
+  return BigInt(v);
+}
+
+const address = (v: string, name: string): `0x${string}` => {
+  if (typeof v !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(v)) throw new Error(`SafeTx ${name} must be an address`);
+  return v as `0x${string}`;
+};
+
 export function safeTxFromJson(j: SafeTxJson): SafeTx {
-  const op = Number(j.operation);
-  if (op !== 0 && op !== 1) throw new Error('bad operation');
+  if (j.operation !== '0' && j.operation !== '1') throw new Error('bad operation');
+  if (typeof j.data !== 'string' || !/^0x([0-9a-fA-F]{2})*$/.test(j.data)) throw new Error('SafeTx data must be 0x hex');
   return {
-    to: j.to as `0x${string}`,
-    value: BigInt(j.value),
+    to: address(j.to, 'to'),
+    value: decimal(j.value, 'value'),
     data: j.data as Hex,
-    operation: op,
-    safeTxGas: BigInt(j.safeTxGas),
-    baseGas: BigInt(j.baseGas),
-    gasPrice: BigInt(j.gasPrice),
-    gasToken: j.gasToken as `0x${string}`,
-    refundReceiver: j.refundReceiver as `0x${string}`,
-    nonce: BigInt(j.nonce),
+    operation: j.operation === '1' ? 1 : 0,
+    safeTxGas: decimal(j.safeTxGas, 'safeTxGas'),
+    baseGas: decimal(j.baseGas, 'baseGas'),
+    gasPrice: decimal(j.gasPrice, 'gasPrice'),
+    gasToken: address(j.gasToken, 'gasToken'),
+    refundReceiver: address(j.refundReceiver, 'refundReceiver'),
+    nonce: decimal(j.nonce, 'nonce'),
   };
 }

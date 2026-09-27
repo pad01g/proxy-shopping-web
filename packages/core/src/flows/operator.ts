@@ -23,6 +23,7 @@ type Events = { report: ReceivedReport; list: OperatorList };
 /** Operator role: maintain the signed kind 30501 list and read reports. */
 export class OperatorClient extends Emitter<Events> {
   private unsubscribe?: () => void;
+  private unaccept?: () => void;
 
   constructor(private readonly s: Session) {
     super();
@@ -30,12 +31,16 @@ export class OperatorClient extends Emitter<Events> {
 
   attach(): this {
     this.unsubscribe ??= this.s.messenger.on('message', (m) => void this.onMessage(m));
+    // Reports come from anyone (§4.3), so they count against the strangers' limit (§4.10).
+    this.unaccept ??= this.s.addAcceptor((_inner, meta) => (meta.type === MSG.report ? 'stranger' : 'reject'));
     return this;
   }
 
   detach(): void {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    this.unaccept?.();
+    this.unaccept = undefined;
   }
 
   /** Our latest published list for this network, if any. */

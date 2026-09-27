@@ -4,7 +4,7 @@
  */
 import {
   arr, base64, bool, btcAddress, decStr, either, evmAddress, evmHash, hex64, hexN, int, map, obj, oneOf, opt, str, tryParse,
-  uintStr, union, url, type Check,
+  uintStr, union, url, utf8Str, type Check,
 } from '../util/validate.js';
 import type { Inner } from './giftwrap.js';
 import {
@@ -58,16 +58,36 @@ export const trackingStatus: Check<TrackingStatus> = obj({
   evidence: arr(evidence, 20),
 });
 
+/** §4.10 request limits: at most 20 items, qty 1..99, sku up to 64 bytes. */
+export const REQUEST_LIMITS = { items: 20, qtyMax: 99, skuBytes: 64 } as const;
+
+/** Why `items` break the §4.10 request limits (undefined = fine), for clients to refuse before signing. */
+export function requestItemsProblem(items: Array<{ sku: string; qty: number }>): string | undefined {
+  if (!items.length) return 'no items';
+  if (items.length > REQUEST_LIMITS.items) return `at most ${REQUEST_LIMITS.items} items per request`;
+  for (const i of items) {
+    if (!Number.isSafeInteger(i.qty) || i.qty < 1 || i.qty > REQUEST_LIMITS.qtyMax) return `qty of ${i.sku} must be 1..${REQUEST_LIMITS.qtyMax}`;
+    if (!i.sku || new TextEncoder().encode(i.sku).length > REQUEST_LIMITS.skuBytes) return `sku must be 1..${REQUEST_LIMITS.skuBytes} bytes`;
+  }
+  return undefined;
+}
+
+/**
+ * §4.4.1 key_proof: lower-case hex without 0x — 64 bytes (BIP340, btc-signet) or 65 bytes (EIP-191, usdc-evm).
+ * Other spellings of the same signature are refused so every implementation sees the same bytes.
+ */
+export const KEY_PROOF = /^(?:[0-9a-f]{128}|[0-9a-f]{130})$/;
+
 export const orderRequest: Check<OrderRequest> = obj({
   shop_url: url,
   shop_region: region,
-  items: arr(obj({ sku: str(128), qty: int(1, 10_000) }), 50, { required: true }),
+  items: arr(obj({ sku: utf8Str(REQUEST_LIMITS.skuBytes), qty: int(1, REQUEST_LIMITS.qtyMax) }), REQUEST_LIMITS.items, { required: true }),
   payment,
   escrow: hex64,
   operator: hex64,
   coordinator: hex64,
   delivery: obj({ ciphertext: base64(8 * 1024), key_for_shopper: str(2048), key_for_escrow_sha256: hex64 }),
-  key_proof: str(132, /^(0x)?[0-9a-fA-F]{128,130}$/),
+  key_proof: str(130, KEY_PROOF),
   user_btc_pubkey: opt(btcPubkey),
   user_btc_address: opt(btcAddress),
   user_evm_address: opt(evmAddress),
@@ -131,7 +151,8 @@ export const safeTxJson: Check<SafeTxJson> = obj({
   nonce: uintStr,
 });
 
-const evmSignature = str(132, /^0x[0-9a-fA-F]{130}$/);
+/** 65-byte ECDSA signature with v = 27 / 28 (§6.4); Safe reads v = 0 / 1 as contract / approved-hash signatures. */
+const evmSignature = str(132, /^0x[0-9a-fA-F]{128}(1b|1c|1B|1C)$/);
 
 export const signedPayout: Check<SignedPayout> = union<SignedPayout>('asset', {
   'btc-signet': obj({ asset: oneOf('btc-signet'), psbt: base64(32 * 1024) }),

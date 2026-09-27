@@ -25,8 +25,8 @@ export { KIND, tagValue, tagValues, type NostrEvent, type EventTemplate } from '
 export * from './nostr/giftwrap.js';
 export * from './nostr/messages.js';
 export * from './nostr/transport.js';
-export { Messenger, MAX_PEER_RELAYS, type IncomingMessage, type MessengerOptions } from './nostr/messenger.js';
-export { BODY_SCHEMAS, parseBody, innerBodyAs } from './nostr/schema.js';
+export { Messenger, MAX_PEER_RELAYS, BACKLOG_LIMIT, rewrap, type IncomingMessage, type MessengerOptions, type Acceptance, type AcceptFn } from './nostr/messenger.js';
+export { BODY_SCHEMAS, parseBody, innerBodyAs, REQUEST_LIMITS, requestItemsProblem } from './nostr/schema.js';
 
 // trust
 export * from './trust/types.js';
@@ -55,22 +55,25 @@ export * from './evm/deployments.js';
 export * from './evm/safe.js';
 export * from './evm/safetx.js';
 export * from './evm/chain.js';
-export { SAFE_PROXY_CREATION_CODE } from './evm/proxy-creation-code.js';
+export * from './evm/proxy-creation-code.js';
 
 // delivery
 export * from './delivery/delivery.js';
 
 // flows
 export { Session, type SessionConfig, type SessionOptions } from './flows/session.js';
-export { checkQuote, maxPayoutFeeReserve, escrowUpfrontMinimum, type QuoteCheck, type QuoteCheckInput } from './flows/quote-check.js';
+export { checkQuote, maxPayoutFeeReserve, escrowUpfrontMinimum, BTC_DUST_SATS, type QuoteCheck, type QuoteCheckInput } from './flows/quote-check.js';
 export * from './flows/timelock-policy.js';
 export * from './flows/payout-check.js';
 export { escrowSpent, type SpendCheck } from './flows/settlement.js';
 export {
-  UserClient, type UserOrder, type UserOrderStatus, type CreateOrderInput, type TimelineEntry, type RefundOffer, type FundingPreview,
-  type UserClientOptions,
+  UserClient, fundingStarted, provisionalFunding, disputeKnown, type UserOrder, type UserOrderStatus, type CreateOrderInput, type TimelineEntry,
+  type RefundOffer, type FundingPreview, type FundingProgress, type UserClientOptions,
 } from './flows/user.js';
-export { EscrowClient, evidenceIntegrity, type EscrowCase, type CaseStatus, type Obligation, type CaseVerification } from './flows/escrow.js';
+export {
+  EscrowClient, evidenceIntegrity, type EscrowCase, type CaseStatus, type Obligation, type CaseVerification, type OrderParts, type RulingTerms,
+} from './flows/escrow.js';
+export { splitEvidence, evidenceWithoutInlineData } from './flows/evidence.js';
 export { OperatorClient, type ReceivedReport } from './flows/operator.js';
 export { CoordinatorClient } from './flows/coordinator.js';
 export { ShopperProfile } from './flows/shopper-profile.js';

@@ -4,7 +4,9 @@ import { describe, expect, it } from 'vitest';
 import { addressToScript, p2wshAddress, witnessScript } from '../btc/script.js';
 import { buildEscrowSpend, signEscrowInput } from '../btc/spend.js';
 import { releaseSafeTx, splitSafeTx } from '../evm/safetx.js';
+import type { EvmClient } from '../evm/chain.js';
 import { btcPayoutProblems, safePayoutProblems, type BtcTemplate } from './payout-check.js';
+import { escrowSpent } from './settlement.js';
 
 const priv = (n: number) => Uint8Array.from({ length: 32 }, (_, i) => (i === 31 ? n : 0));
 const pub = (n: number) => secp256k1.getPublicKey(priv(n), true);
@@ -56,7 +58,7 @@ describe('USDC payout template (§4.10)', () => {
   const usdc = '0x19D57a0C639e9C151F77D67694EfBA67C489F375' as const;
   const multiSend = '0x88247D117162f4a846883EDBDD01F7171b80Ab03' as const;
   const [U, S] = [1, 2].map((n) => privateKeyToAccount(`0x${n.toString(16).padStart(64, '0')}`).address);
-  const base = { usdc, multiSend, nonce: 3n, balance: 100n };
+  const base = { usdc, multiSend, nonce: 3n, balance: 100n, lock: 100n };
 
   it('accepts the refund and the ruling split at the Safe nonce', () => {
     expect(safePayoutProblems(releaseSafeTx({ usdc, to: U, amount: 100n, nonce: 3n }), { ...base, transfers: { only: [U] } })).toEqual([]);
@@ -70,9 +72,44 @@ describe('USDC payout template (§4.10)', () => {
     expect(safePayoutProblems({ ...ok, gasPrice: 1n, refundReceiver: S }, t).join()).toMatch(/gasPrice = 0.*refundReceiver/);
     expect(safePayoutProblems({ ...ok, safeTxGas: 1n }, t).join()).toMatch(/safeTxGas/);
     expect(safePayoutProblems({ ...ok, nonce: 4n }, t).join()).toMatch(/nonce 4/);
-    expect(safePayoutProblems(releaseSafeTx({ usdc, to: U, amount: 99n, nonce: 3n }), t).join()).toMatch(/holds 100/);
+    expect(safePayoutProblems(releaseSafeTx({ usdc, to: U, amount: 99n, nonce: 3n }), t).join()).toMatch(/less than lock_amount 100/);
     expect(safePayoutProblems(releaseSafeTx({ usdc, to: S, amount: 100n, nonce: 3n }), t).join()).toMatch(/other than ours/);
     const split = splitSafeTx({ usdc, multiSend, payouts: [{ to: U, amount: 100n }], nonce: 3n });
     expect(safePayoutProblems({ ...split, to: S }, t).join()).toMatch(/MultiSendCallOnly/);
+  });
+});
+
+describe('USDC dust in the Safe (§4.8, second review)', () => {
+  const usdc = '0x19D57a0C639e9C151F77D67694EfBA67C489F375' as const;
+  const multiSend = '0x88247D117162f4a846883EDBDD01F7171b80Ab03' as const;
+  const [U, S] = [1, 2].map((n) => privateKeyToAccount(`0x${n.toString(16).padStart(64, '0')}`).address);
+
+  it('accepts lock_amount ≤ total ≤ balance: 1 unit sent to the Safe does not block the release or the ruling', () => {
+    const t = { usdc, multiSend, nonce: 0n, lock: 100n, balance: 101n };
+    expect(safePayoutProblems(releaseSafeTx({ usdc, to: U, amount: 100n }), { ...t, transfers: { only: [U] } })).toEqual([]);
+    // a ruling signed over the whole balance (101) and one signed before the dust arrived (100)
+    for (const [u, s] of [[60n, 41n], [60n, 40n]]) {
+      const split = splitSafeTx({ usdc, multiSend, payouts: [{ to: U, amount: u }, { to: S, amount: s }] });
+      expect(safePayoutProblems(split, { ...t, transfers: { exact: [{ to: U, amount: u }, { to: S, amount: s }] } })).toEqual([]);
+    }
+    const over = splitSafeTx({ usdc, multiSend, payouts: [{ to: U, amount: 102n }] });
+    expect(safePayoutProblems(over, { ...t, transfers: { exact: [{ to: U, amount: 102n }] } }).join()).toMatch(/holds only 101/);
+  });
+});
+
+describe('settlement with dust (§4.8)', () => {
+  const safe = '0x00000000000000000000000000000000000000aa';
+  const funded = { asset: 'usdc-evm' as const, safe, deploy_tx: '', fund_tx: `0x${'1'.repeat(64)}`, fee_tx: '', amount: '100' };
+  const evm = (balance: bigint, out: bigint) => ({
+    usdcBalance: async () => balance,
+    usdcTransferredFrom: async () => out,
+  }) as unknown as EvmClient;
+  const tx = `0x${'2'.repeat(64)}`;
+
+  it('is settled once the Safe holds less than lock_amount and the tx moved USDC out of it', async () => {
+    expect((await escrowSpent({ evm: evm(1n, 100n), funded, lock: 100n, claimedTx: tx })).spent).toBe(true);
+    expect((await escrowSpent({ evm: evm(101n, 0n), funded, lock: 100n, claimedTx: tx })).spent).toBe(false);
+    // the balance dropped, but the claimed tx did not pay anything out of the Safe
+    expect((await escrowSpent({ evm: evm(0n, 0n), funded, lock: 100n, claimedTx: tx })).spent).toBe(false);
   });
 });

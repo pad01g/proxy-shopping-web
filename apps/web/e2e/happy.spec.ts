@@ -105,8 +105,15 @@ test('dispute: user opens, escrow rules in its own browser, user countersigns', 
   await expect(escrow.getByTestId('escrow-verification')).toHaveAttribute('data-ok', 'true');
   await escrow.getByTestId('escrow-decrypt-address').click();
   await expect(escrow.getByTestId('escrow-address')).toContainText('東京都新宿区新宿1-1-1');
+  // the escrow fee is exactly dispute_fee_bps (2 %) of the distributable 28667 sats, rounded down: 573
+  await expect(escrow.getByTestId('ruling-distributable')).toHaveAttribute('data-amount', '28667');
+  await expect(escrow.getByTestId('ruling-fee')).toHaveAttribute('data-fee', '573');
   await escrow.getByTestId('ruling-user').fill('20000');
-  await escrow.getByTestId('ruling-shopper').fill('8100'); // escrow fee 567 ≤ dispute_fee_bps 2 %
+  await escrow.getByTestId('ruling-shopper').fill('8100'); // would leave 567 for the escrow: refused
+  await expect(escrow.getByTestId('ruling-fee')).toHaveAttribute('data-split-ok', 'false');
+  await expect(escrow.getByTestId('ruling-submit')).toBeDisabled();
+  await escrow.getByTestId('ruling-shopper').fill('8094');
+  await expect(escrow.getByTestId('ruling-fee')).toHaveAttribute('data-split-ok', 'true');
   await escrow.getByTestId('ruling-reason').fill('一部返金');
   await escrow.getByTestId('ruling-submit').click();
   await expect(escrow.getByTestId('ruling-sent')).toBeVisible();

@@ -19,12 +19,14 @@ export interface InnerFields {
 export const ORDERLESS_TYPES: readonly string[] = ['ack'];
 
 export async function signInner(signer: IdentitySigner, f: InnerFields): Promise<Inner> {
+  // §4.10: the o tag is required except on acks; an empty one would fail isValidInner on the other side.
+  if (!f.orderId && !ORDERLESS_TYPES.includes(f.type)) throw new Error(`${f.type} needs a non-empty order id (o tag, §4.10)`);
   const ev = await signer.signEvent({
     kind: KIND.inner,
     created_at: f.createdAt ?? nowSeconds(),
     tags: [
       ['p', f.recipient],
-      ...(f.orderId || !ORDERLESS_TYPES.includes(f.type) ? [['o', f.orderId]] : []),
+      ...(f.orderId ? [['o', f.orderId]] : []),
       ['t', f.type],
     ],
     content: JSON.stringify(f.body),

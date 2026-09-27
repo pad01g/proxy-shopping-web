@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildFundingTx, EsploraClient, EvmClient, KeySet, PoolTransport, erc20Abi } from '@proxy-shopping/core';
-import { createWorld, LAB_MNEMONICS, LAB_TIMELOCK_POLICY } from '@proxy-shopping/core/testing';
+import { createWorld, LAB_MAX_CLOCK_SKEW_SECONDS, LAB_MNEMONICS, LAB_TIMELOCK_POLICY } from '@proxy-shopping/core/testing';
 import { BitcoindRpc, startEsploraShim } from '@proxy-shopping/core/testing/node';
 import { numberToHex } from 'viem';
 
@@ -46,7 +46,7 @@ async function fundEvm(address, usdc = 1000_000000n) {
   }
 }
 
-const world = await createWorld({ relays: [env('RELAY_URL')], transport: () => new PoolTransport(), chain, retryIntervalMs: 3000 });
+const world = await createWorld({ relays: [env('RELAY_URL')], transport: () => new PoolTransport(), chain, retryIntervalMs: 3000, deployments });
 for (const name of ['shopper-1', 'escrow-1']) {
   await fundEvm(world.keys[name].evmAddress, 0n);
   world.sessions[name].evm = new EvmClient(deployments.chain_id, anvil, world.keys[name].evmAccount, deployments);
@@ -96,6 +96,8 @@ const config = {
   faucet_url: `http://${HOST}:3001`,
   // same names and values as proxy-shopping-go/lab/web-config.json
   timelock_policy: LAB_TIMELOCK_POLICY,
+  // anvil's clock is warped and the lab signet mines on demand (§4.5.1 skew check)
+  max_clock_skew_seconds: LAB_MAX_CLOCK_SKEW_SECONDS,
   allow_private_endpoints: true,
 };
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.map': 'application/json' };

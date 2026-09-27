@@ -65,8 +65,13 @@ export interface SafeTemplate {
   multiSend: `0x${string}`;
   /** The Safe's current nonce (read on chain). */
   nonce: bigint;
-  /** The Safe's USDC balance (read on chain); transfers must add up to exactly this. */
+  /** The Safe's USDC balance now (read on chain). */
   balance: bigint;
+  /**
+   * lock_amount. §4.8: anyone can send USDC to a Safe, so a payout signed earlier may move less than the
+   * balance now; it is acceptable when lock_amount ≤ total ≤ balance (the excess stays in the Safe).
+   */
+  lock: bigint;
   /** `exact`: these transfers in this order (ruling); `only`: every transfer goes to one of these (refund). */
   transfers: { exact: Array<{ to: string; amount: bigint }> } | { only: string[] };
 }
@@ -87,7 +92,8 @@ export function safePayoutProblems(tx: SafeTx, t: SafeTemplate): string[] {
   }
   if (!transfers.length) problems.push('SafeTx moves nothing');
   const total = transfers.reduce((s, x) => s + x.amount, 0n);
-  if (total !== t.balance) problems.push(`SafeTx moves ${total}, but the Safe holds ${t.balance}`);
+  if (total < t.lock) problems.push(`SafeTx moves ${total}, less than lock_amount ${t.lock}`);
+  else if (total > t.balance) problems.push(`SafeTx moves ${total}, but the Safe holds only ${t.balance}`);
   if ('exact' in t.transfers) {
     const exp = t.transfers.exact.filter((x) => x.amount > 0n);
     const same = transfers.length === exp.length && exp.every((e, i) => lower(transfers[i].to) === lower(e.to) && transfers[i].amount === e.amount);

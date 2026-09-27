@@ -127,6 +127,11 @@ export async function startEsploraShim(rpc: BitcoindRpc, opts: { port?: number; 
         return send(200, JSON.stringify(await outspend(rpc, m[1], Number(m[2]))), 'application/json');
       }
       if (p === '/blocks/tip/height') return send(200, String(await rpc.call<number>('getblockcount')));
+      if (p === '/blocks/tip/hash') return send(200, await rpc.call<string>('getbestblockhash'));
+      if ((m = /^\/block\/([0-9a-f]{64})$/.exec(p))) {
+        const h = await rpc.call<{ height: number; time: number }>('getblockheader', m[1]);
+        return send(200, JSON.stringify({ id: m[1], height: h.height, timestamp: h.time }), 'application/json');
+      }
       if (p === '/fee-estimates') return send(200, JSON.stringify({ '1': 2, '6': 1 }), 'application/json');
       return send(404, 'not found');
     } catch (err) {

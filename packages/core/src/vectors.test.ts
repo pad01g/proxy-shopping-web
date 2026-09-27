@@ -1,6 +1,6 @@
 /**
- * Cross-implementation vectors written by the Go node
- * (proxy-shopping-go/docs/test-vectors.json). Skipped when the file is absent.
+ * Cross-implementation vectors written by the Go node (proxy-shopping-go/docs/test-vectors.json).
+ * Without the file the suite fails, unless SKIP_VECTORS=1.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,7 @@ import { p2wshAddress, witnessScript } from './btc/script.js';
 import { decryptAddress, encryptAddress, unwrapDeliveryKey } from './delivery/delivery.js';
 import { predictSafeAddress, safeInitializer, safeSaltNonce } from './evm/safe.js';
 import { packSignatures, releaseSafeTx, safeTxFromJson, safeTxHash, safeTxTransfers, signSafeTx, splitSafeTx } from './evm/safetx.js';
-import { SAFE_PROXY_CREATION_CODE } from './evm/proxy-creation-code.js';
+import { SAFE_PROXY_CREATION_CODE, SAFE_V141_CANONICAL_PROXY_CREATION_CODE } from './evm/proxy-creation-code.js';
 import { escrowPubkeyFromXpub, KeySet } from './keys/derive.js';
 import { orderIndex } from './keys/order.js';
 import { LocalSigner } from './keys/signer.js';
@@ -24,6 +24,14 @@ import { fromHex, toHex } from './util/bytes.js';
 
 const FILE = fileURLToPath(new URL('../../../../proxy-shopping-go/docs/test-vectors.json', import.meta.url));
 const present = existsSync(FILE);
+// Missing vectors must not pass silently (item 19): skipping needs SKIP_VECTORS=1.
+const skip = !present && process.env.SKIP_VECTORS === '1';
+
+describe.skipIf(present || skip)('Go test vectors file', () => {
+  it('is present (mount ../proxy-shopping-go, or set SKIP_VECTORS=1)', () => {
+    expect.fail(`${FILE} not found`);
+  });
+});
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const V: any = present ? JSON.parse(readFileSync(FILE, 'utf8')) : {};
 const keyOf = (name: string) => KeySet.fromMnemonic(V.keys[name].mnemonic);
@@ -66,6 +74,8 @@ describe.skipIf(!present)('Go test vectors', () => {
     const at = (code: `0x${string}`) => predictSafeAddress({ factory: s.factory, singleton: s.singleton, initializer: init, saltNonce: BigInt(s.salt_nonce), proxyCreationCode: code });
     expect(at(s.proxy_creation_code)).toBe(s.address);
     expect(at(s.canonical_v141.proxy_creation_code)).toBe(s.canonical_v141.address);
+    // the allowlist carries exactly these two codes
+    expect(SAFE_V141_CANONICAL_PROXY_CREATION_CODE).toBe(s.canonical_v141.proxy_creation_code);
   });
 
   it('SafeTx EIP-712 hashes and sorted signatures (§6.4)', async () => {

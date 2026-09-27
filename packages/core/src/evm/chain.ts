@@ -1,5 +1,5 @@
 import {
-  createPublicClient, createWalletClient, defineChain, http, parseAbiItem, parseEventLogs,
+  createPublicClient, createWalletClient, defineChain, encodeFunctionData, http, keccak256, parseAbiItem, parseEventLogs,
   type Chain, type Hex, type PrivateKeyAccount, type PublicClient, type Transport, type WalletClient,
 } from 'viem';
 import { erc20Abi, psBondAbi, psEscrowModuleAbi, safeAbi, safeProxyFactoryAbi } from './abi.js';
@@ -8,6 +8,12 @@ import { safeInitializer, safeSaltNonce, type SafeParams } from './safe.js';
 import { packSignatures, type SafeTx } from './safetx.js';
 
 const TRANSFER_EVENT = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)');
+
+/** A transaction signed locally: its hash is known before it is sent, so it can be persisted first. */
+export interface SignedTx {
+  hash: Hex;
+  raw: Hex;
+}
 
 export function evmChain(chainId: number, rpc: string): Chain {
   return defineChain({
@@ -87,24 +93,52 @@ export class EvmClient {
   }
 
   /**
-   * createProxyWithNonce(singleton, initializer, saltNonce); returns the tx hash once mined.
-   * `onSent` receives the hash before we wait, so callers can persist it (a retry must not resend).
+   * Sign a call with our key without sending it. Persisting the result before `sendSigned` means a crash
+   * (or another tab taking over) between signing and sending can never lead to a second, different payment.
    */
-  async deploySafe(p: SafeParams, onSent?: (hash: Hex) => Promise<void>): Promise<Hex> {
-    const hash = await this.wallet.writeContract({
-      address: this.deployments.safe.factory,
+  async signCall(to: `0x${string}`, data: Hex): Promise<SignedTx> {
+    const request = await this.wallet.prepareTransactionRequest({ to, data, account: this.account, chain: this.wallet.chain });
+    const raw = await this.wallet.signTransaction(request as Parameters<typeof this.wallet.signTransaction>[0]);
+    return { hash: keccak256(raw), raw };
+  }
+
+  /** Broadcast a signed transaction; a node that already has it is fine (same hash). */
+  async sendSigned(tx: SignedTx): Promise<Hex> {
+    try {
+      await this.public.sendRawTransaction({ serializedTransaction: tx.raw });
+    } catch (err) {
+      if (!(await this.knowsTx(tx.hash))) throw err;
+    }
+    return tx.hash;
+  }
+
+  /** Whether the node has `hash` mined or in its pool. */
+  async knowsTx(hash: Hex): Promise<boolean> {
+    return this.public.getTransaction({ hash }).then(() => true, () => false);
+  }
+
+  /** Sign, hand the signed tx to `onSigned` (to persist it), send and wait for the receipt. */
+  private async signAndSend(to: `0x${string}`, data: Hex, onSigned?: (tx: SignedTx) => Promise<void>): Promise<Hex> {
+    const tx = await this.signCall(to, data);
+    await onSigned?.(tx);
+    return this.send(await this.sendSigned(tx));
+  }
+
+  /**
+   * createProxyWithNonce(singleton, initializer, saltNonce); returns the tx hash once mined.
+   * `onSigned` receives the signed tx before it is sent, so callers can persist it (a retry must not resend a new one).
+   */
+  async deploySafe(p: SafeParams, onSigned?: (tx: SignedTx) => Promise<void>): Promise<Hex> {
+    const data = encodeFunctionData({
       abi: safeProxyFactoryAbi,
       functionName: 'createProxyWithNonce',
       args: [this.deployments.safe.singleton, safeInitializer(this.deployments, p), safeSaltNonce(p.orderId)],
     });
-    await onSent?.(hash);
-    return this.send(hash);
+    return this.signAndSend(this.deployments.safe.factory, data, onSigned);
   }
 
-  async transferUsdc(to: `0x${string}`, amount: bigint, onSent?: (hash: Hex) => Promise<void>): Promise<Hex> {
-    const hash = await this.wallet.writeContract({ address: this.deployments.usdc, abi: erc20Abi, functionName: 'transfer', args: [to, amount] });
-    await onSent?.(hash);
-    return this.send(hash);
+  async transferUsdc(to: `0x${string}`, amount: bigint, onSigned?: (tx: SignedTx) => Promise<void>): Promise<Hex> {
+    return this.signAndSend(this.deployments.usdc, encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [to, amount] }), onSigned);
   }
 
   /** A successful USDC transfer from → to of at least `minAmount` in the last `lookback` blocks. */
@@ -169,18 +203,29 @@ export class EvmClient {
     return { token, user, shopper, t1, t2 };
   }
 
+  /** USDC Transfer events in the receipt of `txHash`; none for a reverted transaction. */
+  async usdcTransfers(txHash: Hex): Promise<Array<{ from: `0x${string}`; to: `0x${string}`; value: bigint }>> {
+    const receipt = await this.public.getTransactionReceipt({ hash: txHash });
+    if (receipt.status !== 'success') return [];
+    return parseEventLogs({ abi: erc20Abi, logs: receipt.logs, eventName: 'Transfer' })
+      .filter((l) => l.address.toLowerCase() === this.deployments.usdc.toLowerCase())
+      .map((l) => ({ from: l.args.from, to: l.args.to, value: l.args.value }));
+  }
+
   /**
    * Sum of USDC Transfer events to `to` (and, when given, from `from`) in the receipt of `txHash`
    * (used to verify fee payments, §4.6).
    */
   async usdcTransferredIn(txHash: Hex, to: `0x${string}`, from?: `0x${string}`): Promise<bigint> {
-    const receipt = await this.public.getTransactionReceipt({ hash: txHash });
-    if (receipt.status !== 'success') return 0n;
-    const logs = parseEventLogs({ abi: erc20Abi, logs: receipt.logs, eventName: 'Transfer' });
-    return logs
-      .filter((l) => l.address.toLowerCase() === this.deployments.usdc.toLowerCase() && l.args.to.toLowerCase() === to.toLowerCase())
-      .filter((l) => !from || l.args.from.toLowerCase() === from.toLowerCase())
-      .reduce((s, l) => s + l.args.value, 0n);
+    const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+    return (await this.usdcTransfers(txHash))
+      .filter((t) => same(t.to, to) && (!from || same(t.from, from)))
+      .reduce((s, t) => s + t.value, 0n);
+  }
+
+  /** Sum of USDC transferred out of `from` in the receipt of `txHash` (settlement check, §4.8). */
+  async usdcTransferredFrom(txHash: Hex, from: `0x${string}`): Promise<bigint> {
+    return (await this.usdcTransfers(txHash)).filter((t) => t.from.toLowerCase() === from.toLowerCase()).reduce((s, t) => s + t.value, 0n);
   }
 
   // ---- optional bond example (contracts/examples/bond) ----

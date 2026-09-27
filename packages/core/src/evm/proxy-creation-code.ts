@@ -1,7 +1,31 @@
+import { keccak256, type Hex } from 'viem';
+
 /**
  * `SafeProxyFactory.proxyCreationCode()` of Safe v1.4.1 as deployed in the lab
- * (copied from proxy-shopping-go/contracts/abi/SafeProxy.creationCode.hex).
- * Clients may also read it from the factory at runtime.
+ * (copied from proxy-shopping-go/contracts/abi/SafeProxy.creationCode.hex; built with solc 0.8.28).
  */
 export const SAFE_PROXY_CREATION_CODE =
   '0x6080604052348015600e575f5ffd5b5060405161012d38038061012d833981016040819052602b9160b2565b6001600160a01b038116608f5760405162461bcd60e51b815260206004820152602260248201527f496e76616c69642073696e676c65746f6e20616464726573732070726f766964604482015261195960f21b606482015260840160405180910390fd5b5f80546001600160a01b0319166001600160a01b039290921691909117905560dd565b5f6020828403121560c1575f5ffd5b81516001600160a01b038116811460d6575f5ffd5b9392505050565b6044806100e95f395ff3fe60806040525f80546001600160a01b03169035632cf35bc960e11b01602657805f5260205ff35b365f5f375f5f365f845af490503d5f5f3e80603f573d5ffd5b503d5ff3' as const;
+
+/**
+ * `proxyCreationCode()` of the canonical mainnet Safe v1.4.1 SafeProxyFactory
+ * (proxy-shopping-go/docs/test-vectors.json `safe.canonical_v141`).
+ */
+export const SAFE_V141_CANONICAL_PROXY_CREATION_CODE =
+  '0x608060405234801561001057600080fd5b506040516101e63803806101e68339818101604052602081101561003357600080fd5b8101908080519060200190929190505050600073ffffffffffffffffffffffffffffffffffffffff168173ffffffffffffffffffffffffffffffffffffffff1614156100ca576040517f08c379a00000000000000000000000000000000000000000000000000000000081526004018080602001828103825260228152602001806101c46022913960400191505060405180910390fd5b806000806101000a81548173ffffffffffffffffffffffffffffffffffffffff021916908373ffffffffffffffffffffffffffffffffffffffff1602179055505060ab806101196000396000f3fe608060405273ffffffffffffffffffffffffffffffffffffffff600054167fa619486e0000000000000000000000000000000000000000000000000000000060003514156050578060005260206000f35b3660008037600080366000845af43d6000803e60008114156070573d6000fd5b3d6000f3fea264697066735822122003d1488ee65e08fa41e58e888a9865554c535f2c77126a82cb4c0f917f31441364736f6c63430007060033496e76616c69642073696e676c65746f6e20616464726573732070726f7669646564';
+
+/** keccak256 of the proxy creation codes we predict Safe addresses with (lab build, canonical v1.4.1). */
+export const KNOWN_PROXY_CREATION_CODE_HASHES: readonly Hex[] = [
+  keccak256(SAFE_PROXY_CREATION_CODE as Hex),
+  keccak256(SAFE_V141_CANONICAL_PROXY_CREATION_CODE as Hex),
+];
+
+/**
+ * The factory's proxy creation code as reported by the RPC, if it is one we know (§6.2). The CREATE2 address
+ * depends on it, so an unknown code (another proxy, or a lying RPC) must not be used for predictions.
+ */
+export function knownProxyCreationCode(code: Hex): Hex {
+  const hash = keccak256(code);
+  if (!KNOWN_PROXY_CREATION_CODE_HASHES.includes(hash)) throw new Error(`the factory's proxyCreationCode (keccak256 ${hash}) is not a known Safe v1.4.1 build`);
+  return code;
+}

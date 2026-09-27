@@ -4,6 +4,9 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { describe, expect, it } from 'vitest';
 import { EvmClient } from './chain.js';
 import { crossCheckDeployments, deploymentsSchema, type Deployments } from './deployments.js';
+import {
+  KNOWN_PROXY_CREATION_CODE_HASHES, knownProxyCreationCode, SAFE_PROXY_CREATION_CODE, SAFE_V141_CANONICAL_PROXY_CREATION_CODE,
+} from './proxy-creation-code.js';
 import { orderSafeAddress, safeInitializer, safeSaltNonce } from './safe.js';
 import {
   decodeMultiSend, packSignatures, recoverSafeTxSigner, releaseSafeTx, safeTxFromJson, safeTxHash, safeTxToJson,
@@ -118,8 +121,40 @@ describe('EVM infrastructure trust (items 7, 15)', () => {
     expect(crossCheckDeployments({ ...D, safe: { ...D.safe, factory: S.address } }, list).join()).toMatch(/factory/);
   });
 
+  it('requires the list to vouch for module and setup too (item 16)', () => {
+    const list = { chain_id: 31337, rpc: [], usdc: D.usdc, safe: { ...D.safe } };
+    expect(crossCheckDeployments(D, list).join()).toMatch(/module .*missing.*setup .*missing/);
+  });
+
+  it('predicts with a factory proxy code only when it is a known Safe v1.4.1 build (item 9)', () => {
+    expect(knownProxyCreationCode(SAFE_PROXY_CREATION_CODE)).toBe(SAFE_PROXY_CREATION_CODE);
+    expect(knownProxyCreationCode(SAFE_V141_CANONICAL_PROXY_CREATION_CODE as `0x${string}`)).toBe(SAFE_V141_CANONICAL_PROXY_CREATION_CODE);
+    expect(KNOWN_PROXY_CREATION_CODE_HASHES).toHaveLength(2);
+    expect(() => knownProxyCreationCode(`${SAFE_PROXY_CREATION_CODE}00` as `0x${string}`)).toThrow(/not a known Safe v1.4.1 build/);
+  });
+
   it('validates a fetched deployments file', () => {
     expect(deploymentsSchema(D)).toEqual(D);
     expect(() => deploymentsSchema({ ...D, usdc: 'javascript:alert(1)' })).toThrow();
+  });
+});
+
+describe('SafeTx strictness (second review, item 18)', () => {
+  it('reads only decimal numbers and 0x addresses from JSON', () => {
+    const j = safeTxToJson(releaseSafeTx({ usdc: D.usdc, to: U.address, amount: 5n }));
+    expect(safeTxFromJson(j).value).toBe(0n);
+    for (const bad of ['0x10', '-1', ' 1', '1e3', '']) expect(() => safeTxFromJson({ ...j, nonce: bad })).toThrow(/decimal/);
+    expect(() => safeTxFromJson({ ...j, operation: '2' })).toThrow(/operation/);
+    expect(() => safeTxFromJson({ ...j, gasToken: 'zero' })).toThrow(/address/);
+  });
+
+  it('refuses signatures with v = 0 / 1 when packing or recovering', async () => {
+    const tx = releaseSafeTx({ usdc: D.usdc, to: U.address, amount: 5n });
+    const safe = S.address;
+    const sig = await signSafeTx(U, tx, 31337, safe);
+    expect(await recoverSafeTxSigner(tx, 31337, safe, sig)).toBe(U.address);
+    const v1 = `${sig.slice(0, 130)}01` as `0x${string}`; // same r, s: viem would recover a signer from yParity 1
+    await expect(recoverSafeTxSigner(tx, 31337, safe, v1)).rejects.toThrow(/v = 27 or 28/);
+    expect(() => packSignatures([{ signer: U.address, signature: v1 }])).toThrow(/v = 27 or 28/);
   });
 });

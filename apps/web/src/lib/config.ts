@@ -24,6 +24,11 @@ export interface AppConfig {
   allow_private_endpoints?: boolean;
   /** Cap for the BTC funding fee rate (sat/vB, default 50). */
   max_fee_rate?: number;
+  /**
+   * §4.5.1: largest accepted difference between the chain's clock (tip header / latest block time) and ours,
+   * in seconds (default 7200). The lab ships a huge value: anvil's time is warped and its signet mines on demand.
+   */
+  max_clock_skew_seconds?: number;
 }
 
 const OVERRIDES_KEY = 'ps.settings.v1';
@@ -50,7 +55,7 @@ export async function loadBaseConfig(): Promise<AppConfig> {
   }
 }
 
-/** Settings may only override these; the lab flag and the policy come from config.json alone. */
+/** Settings may only override these; the lab flag, the timelock policy and the clock skew come from config.json alone. */
 export const OVERRIDABLE: ReadonlyArray<keyof AppConfig> = [
   'network', 'relays', 'coordinators', 'esplora', 'evm_rpc', 'chain_id', 'deployments_url', 'rates', 'faucet_url', 'max_fee_rate',
 ];

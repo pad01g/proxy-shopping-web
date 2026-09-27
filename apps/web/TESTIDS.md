@@ -35,7 +35,8 @@ await page.getByTestId('confirm-ok').click();                // confirm-dialog d
 await expect(page.getByTestId('order-status')).toHaveAttribute('data-status', 'delivered');
 await page.getByTestId('order-release').click();
 await page.getByTestId('confirm-ok').click();                // confirm-dialog data-action="order-release"
-// 'completed' is set only after the chain shows the escrow output spent (re-checked every 5 s)
+// 'completed' is set only after the chain shows the escrow output spent (re-checked every 5 s);
+// likewise 'settled' / 'refunded' after our own countersign / refund broadcast
 await expect(page.getByTestId('order-status')).toHaveAttribute('data-status', 'completed');
 ```
 
@@ -43,8 +44,8 @@ A runnable version is `e2e/happy.spec.ts` (driven by `scripts/e2e-web.sh`).
 
 ## Confirmation dialog (every fund-moving action)
 
-`order-fund`, `order-release`, `ruling-countersign`, `order-refund` and `refund-offer-accept` do nothing on
-click except open an in-page modal (never `window.confirm`):
+`order-fund`, `order-fund-resume`, `order-release`, `ruling-countersign`, `order-refund` and `refund-offer-accept` do
+nothing on click except open an in-page modal (never `window.confirm`):
 
 | testid | element |
 |---|---|
@@ -142,15 +143,18 @@ new value `X-input`, add `X-add`.
 | `order-id` | full order id text |
 | `order-status` | **`data-status`**: `requested` `quoted` `rejected` `accepted` `funding` `funded` `purchased` `shipped` `delivered` `delivery_failed` `released` `completed` `disputed` `ruled` `settled` `refunded` `cancelled` |
 | `order-last-error` | last action error recorded on the order |
-| `order-pending-settlement` (`data-kind` = `completed` / `settled`) | a peer claimed completion / countersignature; waiting for the chain |
+| `order-pending-settlement` (`data-kind` = `completed` / `settled` / `refunded`) | a peer claimed completion / countersignature, or we broadcast a payout ourselves (countersign, refund); waiting for the chain (BTC outspend, USDC balance < lock_amount + Transfer out of the Safe) |
+| `order-dropped` (`data-count`), rows `order-dropped-item` (`data-type` = message type) | messages of this order's shopper / escrow that were dropped (schema, rate limit) |
 | `quote-waiting`, `quote-rejected` | before quote / shopper declined |
+| `order-resend`, `order-cancel` | status `requested` (e.g. the request could not be published): send order.request + order.escrow_key again / cancel |
 | `quote` | quote section; `quote-rate`, `quote-lock-amount`, `quote-escrow-address` |
 | `quote-timelock-t1`, `quote-timelock-t2` | T1 / T2 with date and countdown; `data-value` = height / UNIX time, `data-at` = estimated UNIX time |
 | `quote-fx-banner` | **`data-level`**: `ok`, `warn` (>3 %), `strong` (>10 %) |
 | `quote-check-ok`, `quote-check-errors`, `quote-check-warnings` | validation result (errors block accepting: address, lock_amount, payout_fee_reserve cap, upfront fee > 2×, timelock policy, deployments cross-check) |
 | `quote-ack-required`, `quote-ack-deviation` | rate > 10 % off or not checkable: the checkbox must be checked before `quote-accept` is enabled |
 | `quote-accept`, `quote-recheck`, `order-cancel` | actions (status `quoted`) |
-| `fund` | funding section (status `accepted`/`funding`); `fund-balance` (`data-enough` = the wallet covers lock + upfront fee; `order-fund` is disabled until then) |
+| `fund` | funding section (status `accepted`/`funding`); `fund-balance` (`data-enough` = the wallet covers lock + upfront fee; `order-fund` is disabled until then); `order-cancel` while no funding transaction exists |
+| `fund-in-progress`, `order-fund-resume` | a funding transaction exists (txid / tx hash persisted) but order.funded was not sent (tab closed, error): resume (confirm dialog, `data-action="order-fund-resume"`) skips the balance / fee preview and never pays twice; cancel is no longer offered |
 | `fund-preview` | BTC: `data-fee` (sats), `data-fee-rate` (sat/vB, capped) |
 | `order-faucet` | lab faucet for the order's asset (only with `faucet_url`) |
 | `order-fund` | fund escrow + upfront fee, then order.funded + escrow.notice (confirm dialog) |
@@ -158,10 +162,11 @@ new value `X-input`, add `X-add`.
 | `order-release` | sign payout to the shopper (confirm dialog; `confirm-warning` unless status is `delivered`) |
 | `order-completed`, `order-completed-txid` | completion verified on chain (BTC outspend / Safe empty + receipt) |
 | `refund-offer`, `refund-offer-problems`, `refund-offer-accept` | shopper's cooperative refund: never auto-signed; accept (confirm dialog) only if it matches the template |
-| `dispute`, `dispute-claim`, `dispute-text`, `dispute-split-user`, `dispute-split-shopper`, `dispute-open` | open a dispute |
+| `dispute`, `dispute-claim`, `dispute-text`, `dispute-split-user`, `dispute-split-shopper`, `dispute-open` | open a dispute (also after an interrupted funding; the evidence goes out in several messages when large) |
 | `dispute-opened`, `dispute-send-evidence` | after opening |
-| `ruling`, `ruling-problems`, `ruling-countersign`, `ruling-settled` | escrow ruling: review, countersign + broadcast (confirm dialog) |
-| `refund`, `refund-status` (`data-reached`), `refund-t2`, `order-refund` | user-only refund after T2 (confirm dialog); shown while the escrow output is unspent on chain, whatever the status |
+| `ruling-pending` (`data-split-user`) | a ruling arrived before we knew of a dispute; shown as ruling once the shopper's dispute.open copy or an escrow evidence request arrives |
+| `ruling`, `ruling-problems`, `ruling-countersign`, `ruling-settled` | escrow ruling: review, countersign + broadcast (confirm dialog). `ruling-countersign` is shown whenever there is a ruling and the escrow output is unspent — not keyed on `order-status` (a later dispute.open keeps `ruled`) — and hidden only while our own broadcast waits for the chain |
+| `refund`, `refund-status` (`data-reached`), `refund-t2`, `order-refund` | user-only refund after T2 (confirm dialog); shown while the escrow output is unspent on chain, whatever the status, including after an interrupted funding |
 | `report`, `report-subject`, `report-text`, `report-send`, `report-sent` | report to the operator |
 | `order-timeline`, `order-timeline-item` (`data-kind` = message type) | history |
 
@@ -180,14 +185,16 @@ new value `X-input`, add `X-add`.
 | `escrow-profile`, `escrow-profile-name`, `escrow-profile-bps`, `escrow-profile-min-sats`, `escrow-profile-min-usdc`, `escrow-profile-dispute-bps`, `escrow-profile-publish`, `escrow-profile-published` | kind 30503 publisher |
 | `escrow-case` | detail page, `data-order-id` |
 | `escrow-case-detail-status` | `data-status` |
-| `escrow-case-rejected`, `escrow-conflicts`, `escrow-verification` (`data-ok`), `escrow-pending-settlement` | §4.7 assembly: refused case, evidence contradicting the notice, on-chain checks, unconfirmed countersignature |
+| `escrow-conflicts`, `escrow-verification` (`data-ok`), `escrow-pending-settlement` | §4.7 assembly: messages naming another request (recorded, ignored), on-chain checks, unconfirmed countersignature. A case appears only once a notice / dispute names a request whose request + quote match the funded output on chain; a notice of the real request signer replaces a case assembled without one |
 | `escrow-check-obligation`, `escrow-obligation` (`data-paid`) | on-chain upfront fee check |
 | `escrow-dispute`, `escrow-missing`, `escrow-request-evidence` | claims / missing evidence |
 | `escrow-evidence`, `escrow-evidence-message` | evidence viewer |
 | `escrow-evidence-item` (`data-integrity` = `ok` / `mismatch` / `no-data`), `escrow-evidence-mismatch`, `escrow-evidence-image` | purchase evidence; inline data must match its sha256 |
 | `escrow-attachment` (`data-sha256`) | assembled and hash-checked attachments (images shown) |
 | `escrow-decrypt-address`, `escrow-address` | decrypted delivery address |
-| `escrow-ruling`, `ruling-user`, `ruling-shopper`, `ruling-fee`, `ruling-reason`, `ruling-submit`, `ruling-sent` | ruling form (fee = remainder) |
+| `escrow-ruling`, `ruling-user`, `ruling-shopper`, `ruling-reason`, `ruling-submit`, `ruling-sent` | ruling form |
+| `ruling-distributable` (`data-amount`), `ruling-terms-error` | what the ruling splits (BTC: output − reserve; USDC: the Safe's balance now) / why it cannot be computed (e.g. no escrow profile published) |
+| `ruling-fee` (`data-fee`, `data-split-ok`) | the escrow fee = floor(dispute_fee_bps × distributable); `ruling-submit` is enabled only when user + shopper = distributable − fee (`data-split-ok="true"`) |
 | `escrow-settled` | a party countersigned |
 
 ## Operator `/operator`

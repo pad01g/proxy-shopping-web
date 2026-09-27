@@ -1,4 +1,4 @@
-import { timelockEta, type DisputeOpen, type Payment, type UserOrder } from '@proxy-shopping/core/browser';
+import { fundingStarted, provisionalFunding, timelockEta, type DisputeOpen, type Payment, type UserOrder } from '@proxy-shopping/core/browser';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useParams } from 'react-router-dom';
 import { ActionButton, Copyable, ErrorBoundary, Field, Mono, Section, type ConfirmSpec } from '../components/ui';
@@ -45,8 +45,17 @@ export function OrderDetailPage() {
       {o.lastError && <p className="banner error" data-testid="order-last-error">{o.lastError}</p>}
       {o.pendingSettlement && (
         <p className="banner warn" data-testid="order-pending-settlement" data-kind={o.pendingSettlement.kind}>
-          相手が{o.pendingSettlement.kind === 'completed' ? '完了' : '連署'}を報告しました（<Mono>{short(o.pendingSettlement.txid)}</Mono>）。チェーンで確認できるまで、この注文は終わっていません。
+          {o.pendingSettlement.from === o.shopper || o.pendingSettlement.from === o.escrow
+            ? `相手が${o.pendingSettlement.kind === 'completed' ? '完了' : '連署'}を報告しました`
+            : `${o.pendingSettlement.kind === 'refunded' ? '返金' : '精算'}の取引を放送しました`}
+          （<Mono>{short(o.pendingSettlement.txid)}</Mono>）。チェーンで確認できるまで、この注文は終わっていません。
         </p>
+      )}
+      {!!o.dropped?.length && (
+        <div className="banner warn" data-testid="order-dropped" data-count={o.dropped.length}>
+          受け取れなかったメッセージがあります（相手に送り直しを頼んでください）:
+          <ul>{o.dropped.map((d, i) => <li key={i} data-testid="order-dropped-item" data-type={d.type}>{formatTime(d.at)} {d.from} の {d.type}: {d.reason}</li>)}</ul>
+        </div>
       )}
 
       <Panel name="summary">
@@ -64,8 +73,9 @@ export function OrderDetailPage() {
       <Panel name="progress"><ProgressPanel o={o} /></Panel>
       {o.refundOffer && !o.escrowSpent && <Panel name="refund-offer"><RefundOfferPanel o={o} /></Panel>}
       <Panel name="dispute"><DisputePanel o={o} /></Panel>
-      {/* Rendered on its own and never hidden by a peer's claim: only a verified on-chain spend retires it. */}
-      {o.funded && !o.escrowSpent && <Panel name="refund"><RefundPanel o={o} /></Panel>}
+      {/* Rendered on its own and never hidden by a peer's claim: only a verified on-chain spend retires it.
+          An interrupted funding counts too (the refund confirms it on chain first). */}
+      {provisionalFunding(o) && !o.escrowSpent && <Panel name="refund"><RefundPanel o={o} /></Panel>}
       <Panel name="report"><ReportPanel o={o} /></Panel>
 
       <Panel name="timeline">
@@ -105,7 +115,20 @@ function QuotePanel({ o }: { o: UserOrder }) {
   const now = useChainNow(rt, o.payment);
   const [ack, setAck] = useState(false);
   const q = o.quote;
-  if (!q) return <Section title="見積"><p className="muted" data-testid="quote-waiting">shopper の見積を待っています…</p></Section>;
+  if (!q) {
+    return (
+      <Section title="見積">
+        <p className="muted" data-testid="quote-waiting">shopper の見積を待っています…</p>
+        {o.status === 'requested' && (
+          <div className="row">
+            {/* A request whose publish failed stays here: send it (and order.escrow_key) again, or give up. */}
+            <ActionButton testid="order-resend" kind="plain" onClick={() => rt.user.resendRequest(o.id)}>依頼を送り直す</ActionButton>
+            <ActionButton testid="order-cancel" kind="plain" onClick={() => rt.user.cancel(o.id)}>取り消す</ActionButton>
+          </div>
+        )}
+      </Section>
+    );
+  }
   if (!q.accept) {
     return (
       <Section title="見積">
@@ -199,6 +222,32 @@ function FundPanel({ o }: { o: UserOrder }) {
   // BTC also pays the network fee (see the preview); this is the lower bound.
   const enough = have !== undefined && have >= need;
   const faucetUrl = rt.config.faucet_url;
+  if (fundingStarted(o)) {
+    // A funding transaction exists already: finish that one. Balance and fee preview no longer apply
+    // (the coins are spent), and nothing new is paid beyond the steps not yet sent.
+    return (
+      <Section title="入金" testid="fund">
+        <p className="banner warn" data-testid="fund-in-progress">
+          入金が途中で止まりました（{o.fundingProgress?.btcTxid ?? o.fundingProgress?.fundTx ?? o.fundingProgress?.deployTx}）。続きを実行すると、同じ取引をチェーンで確かめ、shopper と escrow に知らせます。
+        </p>
+        <div className="row">
+          <ActionButton
+            testid="order-fund-resume"
+            confirm={{
+              title: '入金の続きを実行します',
+              amount: formatAsset(need, o.payment),
+              recipient: q.escrow_address,
+              details: <p className="muted">すでに送った取引は送り直しません。まだの手順（{isBtc ? 'なし' : 'Safe への送金・escrow への前払い'}）だけを実行します。</p>,
+              okLabel: '続ける',
+            }}
+            onClick={() => rt.user.fund(o.id)}
+          >
+            入金を再開する
+          </ActionButton>
+        </div>
+      </Section>
+    );
+  }
   const confirm = async (): Promise<ConfirmSpec> => {
     const p = await rt.user.previewFunding(o.id);
     return {
@@ -249,6 +298,7 @@ function FundPanel({ o }: { o: UserOrder }) {
         <ActionButton testid="order-fund" disabled={!enough} confirm={confirm} onClick={() => rt.user.fund(o.id)}>
           {isBtc ? '多重署名に入金する' : 'Safe を作って入金する'}
         </ActionButton>
+        <ActionButton testid="order-cancel" kind="plain" onClick={() => rt.user.cancel(o.id)}>取り消す</ActionButton>
       </div>
     </Section>
   );
@@ -334,14 +384,17 @@ function DisputePanel({ o }: { o: UserOrder }) {
   const [splitUser, setSplitUser] = useState('');
   const [splitShopper, setSplitShopper] = useState('');
   const [problems, setProblems] = useState<string[]>();
+  // §4.8: review (and countersign) whenever there is a ruling and the escrow output is unspent — never keyed on
+  // the status, which a later dispute.open or a peer's claim could change.
+  const reviewable = !!o.ruling && !o.escrowSpent;
   useEffect(() => {
-    if (o.ruling && o.status === 'ruled') void rt.user.reviewRuling(o.id).then(setProblems);
-  }, [o.ruling, o.status, o.id, rt]);
+    if (reviewable) void rt.user.reviewRuling(o.id).then(setProblems);
+  }, [reviewable, o.ruling, o.updatedAt, o.id, rt]);
 
-  if (!o.funded) return null;
+  if (!provisionalFunding(o)) return null;
   // Open to dispute whenever the escrow output is unspent on chain, whatever a peer claims.
   const canOpen = !o.escrowSpent && !o.dispute;
-  if (!canOpen && !o.dispute && !o.ruling) return null;
+  if (!canOpen && !o.dispute && !o.ruling && !o.pendingRuling) return null;
   const r = o.ruling;
   return (
     <Section title="紛争" testid="dispute">
@@ -384,6 +437,11 @@ function DisputePanel({ o }: { o: UserOrder }) {
           <ActionButton testid="dispute-send-evidence" kind="plain" onClick={() => rt.user.sendEvidence(o.id)}>証拠を送り直す</ActionButton>
         </p>
       )}
+      {o.pendingRuling && !r && (
+        <p className="banner warn" data-testid="ruling-pending" data-split-user={o.pendingRuling.body.split.user}>
+          escrow から裁定が届きましたが、紛争が開かれたことをまだ確かめられません。shopper の申立の写しか escrow からの証拠の依頼が届けば表示します。
+        </p>
+      )}
       {r && (
         <div data-testid="ruling">
           <p>
@@ -394,7 +452,8 @@ function DisputePanel({ o }: { o: UserOrder }) {
           {problems && problems.length > 0 && (
             <div className="banner error" data-testid="ruling-problems"><ul>{problems.map((p) => <li key={p}>{p}</li>)}</ul></div>
           )}
-          {o.status === 'ruled' && (
+          {/* Hidden only while our own broadcast waits for the chain; a peer's claim never hides it (§4.10). */}
+          {reviewable && o.pendingSettlement?.from !== rt.pubkey && (
             <ActionButton
               testid="ruling-countersign"
               disabled={!problems || problems.length > 0}

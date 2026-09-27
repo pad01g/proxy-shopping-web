@@ -7,7 +7,7 @@ import { LAB_MNEMONICS, LAB_TIMELOCK_POLICY } from '../testing/world.js';
 import type { EffectiveEntry, EscrowProfileContent } from '../trust/types.js';
 import { toHex } from '../util/bytes.js';
 import { checkQuote, maxPayoutFeeReserve, type QuoteCheckInput } from './quote-check.js';
-import { checkTimelock, timelockBounds, timelockEta } from './timelock-policy.js';
+import { checkTimelock, clockSkewProblem, timelockBounds, timelockEta } from './timelock-policy.js';
 
 const ORDER = '0123456789abcdef0123456789abcdef';
 const user = KeySet.fromMnemonic(LAB_MNEMONICS['user-1']);
@@ -94,6 +94,27 @@ describe('quote check (§4.5)', () => {
     expect(near.errors.join()).toMatch(/T1 is only 10 blocks away/);
     const unknownTip = await checkQuote(input(quote(), { chainNow: undefined }));
     expect(unknownTip.errors.join()).toMatch(/current height/);
+  });
+
+  it('an unknown shopper profile is an error unless the policy fixes min_t1 (item 18)', async () => {
+    const r = await checkQuote(input(quote(), { deliveryDays: undefined, timelockPolicy: {} }));
+    expect(r.errors.join()).toMatch(/shopper profile unknown/);
+    // the lab policy sets btc_min_t1_blocks, so delivery_days is not needed there
+    expect((await checkQuote(input(quote(), { deliveryDays: undefined }))).ok).toBe(true);
+  });
+
+  it('a BTC upfront fee below the dust limit is an error (item 18)', async () => {
+    const r = await checkQuote(input(quote(undefined, { escrow_upfront_fee: '545' })));
+    expect(r.errors.join()).toMatch(/dust limit 546/);
+  });
+});
+
+describe('clock skew (§4.5.1, item 14)', () => {
+  it('refuses a chain clock more than max_clock_skew_seconds away (default 2 h)', () => {
+    expect(clockSkewProblem(1_000_000 + 7200, 1_000_000)).toBeUndefined();
+    expect(clockSkewProblem(1_000_000 + 7201, 1_000_000)).toMatch(/7201 s ahead/);
+    expect(clockSkewProblem(1_000_000 - 7201, 1_000_000)).toMatch(/behind/);
+    expect(clockSkewProblem(1_000_000 + 7201, 1_000_000, 315_360_000)).toBeUndefined();
   });
 });
 

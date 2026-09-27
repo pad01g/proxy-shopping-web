@@ -40,10 +40,12 @@ export class MemoryRelayNetwork {
     return res;
   }
 
+  /** Like a relay: matching events, newest first, at most `filter.limit` per relay. */
   private query(relays: string[], filter: Filter): NostrEvent[] {
     const seen = new Map<string, NostrEvent>();
     for (const url of unique(relays)) {
-      for (const e of this.relays.get(url) ?? []) if (matchFilter(filter, e)) seen.set(e.id, e);
+      const hits = (this.relays.get(url) ?? []).filter((e) => matchFilter(filter, e)).sort((a, b) => b.created_at - a.created_at);
+      for (const e of filter.limit === undefined ? hits : hits.slice(0, filter.limit)) seen.set(e.id, e);
     }
     return [...seen.values()];
   }

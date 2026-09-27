@@ -80,7 +80,10 @@ describe('keys', () => {
     const evm = await signKeyProofEvm(user.evmAccount, order, user.nostrPublicKey);
     expect(evm).toMatch(/^[0-9a-f]{130}$/);
     expect(await verifyKeyProofEvm(evm, user.evmAddress, order, user.nostrPublicKey)).toBe(true);
-    expect(await verifyKeyProofEvm(`0x${evm}`, user.evmAddress, order, user.nostrPublicKey)).toBe(true);
+    // Spec hex is lower case without a prefix: other spellings of the same signature are refused (item 18).
+    expect(await verifyKeyProofEvm(`0x${evm}`, user.evmAddress, order, user.nostrPublicKey)).toBe(false);
+    expect(await verifyKeyProofEvm(evm.toUpperCase(), user.evmAddress, order, user.nostrPublicKey)).toBe(false);
+    expect(verifyKeyProofBtc(btc.toUpperCase(), btcPub, order, user.nostrPublicKey)).toBe(false);
     expect(await verifyKeyProofEvm(evm, mallory.evmAddress, order, user.nostrPublicKey)).toBe(false);
     expect(await verifyRequestKeyProof({ payment: 'usdc-evm', user_evm_address: user.evmAddress, key_proof: evm } as never, order, mallory.nostrPublicKey)).toBe(false);
   });

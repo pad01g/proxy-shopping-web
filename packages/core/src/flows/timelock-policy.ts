@@ -71,6 +71,18 @@ export function checkTimelock(p: {
   return errors;
 }
 
+/** §4.5.1 is checked against the chain's clock; it must agree with ours within this (config `max_clock_skew_seconds`). */
+export const DEFAULT_MAX_CLOCK_SKEW_SECONDS = 2 * 3600;
+
+/**
+ * The timelock policy trusts the chain's notion of "now" (tip header time / latest block timestamp). A chain
+ * API that lies about it could make a T1 look far away; refuse when it differs from our clock by more than `max`.
+ */
+export function clockSkewProblem(chainTime: number, now: number, max = DEFAULT_MAX_CLOCK_SKEW_SECONDS): string | undefined {
+  const skew = chainTime - now;
+  return Math.abs(skew) > max ? `the chain clock is ${skew} s ${skew > 0 ? 'ahead of' : 'behind'} ours (max_clock_skew_seconds ${max})` : undefined;
+}
+
 /** Estimated UNIX time at which a timelock is reached (BTC: 600 s per remaining block). */
 export function timelockEta(asset: Payment, value: number, chainNow: number, now = Math.floor(Date.now() / 1000)): number {
   return asset === 'btc-signet' ? now + (value - chainNow) * SECONDS_PER_BLOCK : now + (value - chainNow);

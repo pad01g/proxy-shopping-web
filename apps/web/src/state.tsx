@@ -4,7 +4,7 @@ import {
   clearOverrides, effectiveConfig, loadBaseConfig, loadOverrides, saveOverrides, type AppConfig,
 } from './lib/config';
 import {
-  forgetIdentity, identityDbName, loadStoredIdentity, saveIdentity, unlockIdentity, type Identity, type StoredIdentity,
+  forgetIdentity, loadStoredIdentity, logoutDbName, rememberDbName, saveIdentity, unlockIdentity, type Identity, type StoredIdentity,
 } from './lib/identity';
 import { createRuntime, type Runtime } from './lib/runtime';
 import { acquireTabLock, type TabLock } from './lib/single-tab';
@@ -105,6 +105,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         current.current?.stop();
         current.current = rt;
         setRuntime(rt);
+        void rememberDbName(rt.dbName).then((st) => st && setStored(st)).catch(() => undefined);
       })
       .catch((e: Error) => setError(e.message));
     return () => {
@@ -124,10 +125,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [stored]);
 
   const logout = useCallback(async (opts: { deleteData?: boolean } = {}) => {
-    const pubkey = current.current?.pubkey ?? stored?.pubkey;
+    const dbName = opts.deleteData ? await logoutDbName(stored, current.current?.dbName, window.nostr) : undefined;
+    if (opts.deleteData && !dbName) throw new Error('この ID のデータベースが分かりません。NIP-07 拡張を有効にしてからやり直してください');
     stopRuntime();
     await forgetIdentity();
-    if (opts.deleteData && pubkey) await IndexedDBStorage.deleteDatabase(identityDbName(pubkey));
+    if (dbName) await IndexedDBStorage.deleteDatabase(dbName);
     setStored(undefined);
     setId(undefined);
   }, [stored, stopRuntime]);

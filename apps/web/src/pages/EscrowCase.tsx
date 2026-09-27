@@ -10,6 +10,16 @@ export function EscrowCasePage() {
   const rt = useRuntime();
   const [c] = useLive(() => rt.escrow.getCase(id), (cb) => rt.escrow.on('case', (x) => x.orderId === id && cb()), [rt, id]);
   const [missing] = useLive(() => rt.escrow.missingEvidence(id), (cb) => rt.escrow.on('case', cb), [rt, id]);
+  // §4.8: what a ruling splits now (USDC: the Safe's balance) and our fee, exactly dispute_fee_bps of it.
+  const [terms] = useLive(
+    () => rt.escrow.rulingTerms(id).then((t) => ({ t, error: undefined }), (e: Error) => ({ t: undefined, error: e.message })),
+    (cb) => {
+      const off = rt.escrow.on('case', (x) => x.orderId === id && cb());
+      const timer = setInterval(cb, 15_000);
+      return () => { off(); clearInterval(timer); };
+    },
+    [rt, id],
+  );
   const [address, setAddress] = useState<Address>();
   const [user, setUser] = useState('');
   const [shopper, setShopper] = useState('');
@@ -20,16 +30,14 @@ export function EscrowCasePage() {
   // Only image types a browser renders without scripts; everything else is listed, not shown.
   const IMAGE = /^image\/(png|jpeg|gif|webp)$/;
   const asset = c.request?.payment;
-  const lock = q?.lock_amount ? BigInt(q.lock_amount) : 0n;
-  const reserve = asset === 'btc-signet' && q?.payout_fee_reserve ? BigInt(q.payout_fee_reserve) : 0n;
-  const distributable = lock - reserve;
-  const fee = user && shopper && /^\d+$/.test(user) && /^\d+$/.test(shopper) ? distributable - BigInt(user) - BigInt(shopper) : undefined;
+  const t = terms?.t;
+  const entered = /^\d{1,40}$/.test(user) && /^\d{1,40}$/.test(shopper) ? BigInt(user) + BigInt(shopper) : undefined;
+  const splitOk = !!t && entered === t.distributable - t.fee;
 
   return (
     <div data-testid="escrow-case" data-order-id={c.orderId}>
       <h1>案件 <Mono>{c.orderId}</Mono></h1>
       <p>状態: <span className="badge" data-testid="escrow-case-detail-status" data-status={c.status}>{STATUS_LABEL[c.status] ?? c.status}</span></p>
-      {c.rejected && <p className="banner error" data-testid="escrow-case-rejected">この案件は受けられません: {c.rejected}</p>}
       {!!c.conflicts?.length && (
         <div className="banner warn" data-testid="escrow-conflicts">入金の通知と食い違う証拠（無視しました）:<ul>{c.conflicts.map((x) => <li key={x}>{x}</li>)}</ul></div>
       )}
@@ -127,14 +135,24 @@ export function EscrowCasePage() {
 
       {c.status !== 'settled' && (
         <Section title="裁定" testid="escrow-ruling">
-          <p className="muted">配分の合計は {formatAsset(distributable, asset)}（多重署名の残高 − 払い出し手数料の予備）。残りが escrow の手数料になります。</p>
+          {t ? (
+            <p className="muted" data-testid="ruling-distributable" data-amount={t.distributable.toString()}>
+              配分できる額は {formatAsset(t.distributable, asset)}（{asset === 'btc-signet' ? '多重署名の出力 − 払い出し手数料の予備' : 'いまの Safe の残高'}）。
+              escrow の手数料はその {t.bps / 100}%（切り捨て）で、user と shopper への額の合計は {formatAsset(t.distributable - t.fee, asset)} にしてください。
+            </p>
+          ) : (
+            <p className="banner warn" data-testid="ruling-terms-error">{terms?.error ?? '配分できる額を確かめています…'}</p>
+          )}
           <div className="grid2">
             <Field label="user へ"><input data-testid="ruling-user" value={user} onChange={(e) => setUser(e.target.value)} /></Field>
             <Field label="shopper へ"><input data-testid="ruling-shopper" value={shopper} onChange={(e) => setShopper(e.target.value)} /></Field>
           </div>
-          <p data-testid="ruling-fee">escrow 手数料: {fee === undefined ? '-' : formatAsset(fee < 0n ? 0n : fee, asset)}{fee !== undefined && fee < 0n && '（合計が多すぎます）'}</p>
+          <p data-testid="ruling-fee" data-fee={t?.fee.toString() ?? ''} data-split-ok={splitOk ? 'true' : 'false'}>
+            escrow 手数料: {t ? formatAsset(t.fee, asset) : '-'}
+            {t && entered !== undefined && !splitOk && `（user + shopper は ${formatAsset(t.distributable - t.fee, asset)} にしてください。いまは ${formatAsset(entered, asset)}）`}
+          </p>
           <Field label="理由"><textarea data-testid="ruling-reason" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
-          <ActionButton testid="ruling-submit" disabled={fee === undefined || fee < 0n || !!c.ruling || !!c.rejected} onClick={() => rt.escrow.rule(c.orderId, { user, shopper }, reason)}>
+          <ActionButton testid="ruling-submit" disabled={!splitOk || !!c.ruling} onClick={() => rt.escrow.rule(c.orderId, { user, shopper, escrow_fee: t!.fee.toString() }, reason)}>
             署名して裁定を送る
           </ActionButton>
           {c.ruling && <p className="banner ok" data-testid="ruling-sent">送信済み: user {c.ruling.split.user} / shopper {c.ruling.split.shopper} / 手数料 {c.ruling.split.escrow_fee}</p>}

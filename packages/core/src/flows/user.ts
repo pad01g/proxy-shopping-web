@@ -4,12 +4,14 @@ import { buildFundingTx } from '../btc/funding.js';
 import { witnessScript, type EscrowKeys } from '../btc/script.js';
 import { extractTx, finalizeEscrowInput, psbtFromBase64, psbtToBase64, signEscrowInput, buildEscrowSpend } from '../btc/spend.js';
 import { sealDelivery } from '../delivery/delivery.js';
+import type { SignedTx } from '../evm/chain.js';
 import { crossCheckDeployments, type Deployments } from '../evm/deployments.js';
-import { SAFE_PROXY_CREATION_CODE } from '../evm/proxy-creation-code.js';
+import { knownProxyCreationCode, SAFE_PROXY_CREATION_CODE } from '../evm/proxy-creation-code.js';
 import { recoverSafeTxSigner, releaseSafeTx, safeTxFromJson, safeTxToJson, signSafeTx } from '../evm/safetx.js';
 import { signKeyProofBtc, signKeyProofEvm } from '../keys/proof.js';
 import { innerMeta, type Inner } from '../nostr/giftwrap.js';
 import type { IncomingMessage } from '../nostr/messenger.js';
+import { requestItemsProblem } from '../nostr/schema.js';
 import {
   CONTAINER_TYPES, MSG, type Address, type DisputeEvidence, type DisputeOpen, type DisputeRuling, type EscrowNotice, type OrderFunded,
   type OrderPurchased, type OrderQuote, type OrderRequest, type OrderShipping, type Payment, type SignedPayout, type TrackingStatus,
@@ -20,10 +22,12 @@ import { fromHex, newOrderId, toHex } from '../util/bytes.js';
 import { parseUnits } from '../util/decimal.js';
 import { Emitter } from '../util/emitter.js';
 import { KeyedMutex, nowSeconds } from '../util/time.js';
+import { evidenceWithoutInlineData, splitEvidence } from './evidence.js';
 import { btcPayoutProblems, safePayoutProblems } from './payout-check.js';
 import { checkQuote, type QuoteCheck } from './quote-check.js';
 import type { Session } from './session.js';
 import { escrowSpent } from './settlement.js';
+import { clockSkewProblem } from './timelock-policy.js';
 
 export type UserOrderStatus =
   | 'requested' | 'quoted' | 'rejected' | 'accepted' | 'funding' | 'funded' | 'purchased' | 'shipped'
@@ -71,15 +75,21 @@ export interface UserOrder {
   quoteInner?: Inner;
   quoteCheck?: QuoteCheck;
   acceptInner?: Inner;
-  /** Intermediate funding progress, persisted before waiting, so a retry never pays twice. */
-  fundingProgress?: { btcTxid?: string; btcTxHex?: string; deployTx?: string; fundTx?: string; feeTx?: string };
+  /**
+   * Intermediate funding progress, persisted before anything is sent, so a retry (or another tab) never pays
+   * twice. EVM steps keep the signed raw transaction too, so a step signed but never sent can be sent later.
+   */
+  fundingProgress?: FundingProgress;
   funded?: OrderFunded;
   fundedInner?: Inner;
   purchased?: OrderPurchased;
   tracking: TrackingStatus[];
   releaseTxid?: string;
-  /** order.completed / dispute.countersigned claims waiting for on-chain confirmation (§4.8). */
-  pendingSettlement?: { kind: 'completed' | 'settled'; txid: string; from: string; at: number };
+  /**
+   * A payout waiting for on-chain confirmation (§4.8): a peer's order.completed / dispute.countersigned
+   * claim, or a transaction we broadcast ourselves (a relay's acceptance is not a spend).
+   */
+  pendingSettlement?: { kind: 'completed' | 'settled' | 'refunded'; txid: string; from: string; at: number };
   /** Set once the chain shows the escrow output was paid out; only then are the T2 refund and dispute moot. */
   escrowSpent?: { txid?: string; at: number };
   completedTxid?: string;
@@ -88,13 +98,59 @@ export interface UserOrder {
   shopperDispute?: { open: DisputeOpen; inner: Inner };
   ruling?: DisputeRuling;
   rulingInner?: Inner;
+  /** A ruling that arrived before we knew of a dispute; evaluated once we do (§4.8). */
+  pendingRuling?: { body: DisputeRuling; inner: Inner; receivedAt: number };
+  /** The escrow asked us for evidence, so it knows of a dispute (§4.8). */
+  evidenceRequestedAt?: number;
   settledTxid?: string;
   refundOffer?: RefundOffer;
   refundTxid?: string;
   messages: Inner[];
   timeline: TimelineEntry[];
   lastError?: string;
+  /** Messages of this order's parties that were dropped (schema, rate limit), newest last, shown to the user. */
+  dropped?: Array<{ at: number; type: string; reason: string; from: 'shopper' | 'escrow' }>;
 }
+
+export interface FundingProgress {
+  btcTxid?: string;
+  btcTxHex?: string;
+  /** Safe deployment tx hash, or 'already-deployed' when the Safe existed (anyone may deploy it). */
+  deployTx?: string;
+  fundTx?: string;
+  feeTx?: string;
+  deployRaw?: string;
+  fundRaw?: string;
+  feeRaw?: string;
+}
+
+/** Only a transaction id / hash counts as "funding started"; before that the order may still be cancelled. */
+export function fundingStarted(o: Pick<UserOrder, 'fundingProgress'>): boolean {
+  const p = o.fundingProgress;
+  return !!(p?.btcTxid || (p?.deployTx && p.deployTx !== 'already-deployed') || p?.fundTx || p?.feeTx);
+}
+
+/**
+ * The order.funded body implied by a funding that was interrupted before order.funded was sent (tab closed,
+ * network error): the escrow output may already hold our money, so refund and dispute must stay reachable.
+ * It still has to be confirmed on chain before use.
+ */
+export function provisionalFunding(o: Pick<UserOrder, 'funded' | 'fundingProgress' | 'quote' | 'payment'>): OrderFunded | undefined {
+  if (o.funded) return o.funded;
+  const p = o.fundingProgress;
+  const q = o.quote;
+  if (!p || !q?.lock_amount || !q.escrow_address) return undefined;
+  if (o.payment === 'btc-signet') {
+    return p.btcTxid ? { asset: 'btc-signet', txid: p.btcTxid, vout: 0, amount: q.lock_amount, fee_txid: p.btcTxid } : undefined;
+  }
+  return p.fundTx
+    ? { asset: 'usdc-evm', safe: q.escrow_address, deploy_tx: p.deployTx ?? '', fund_tx: p.fundTx, fee_tx: p.feeTx ?? '', amount: q.lock_amount }
+    : undefined;
+}
+
+/** Whether we know of an open dispute on this order: ours, the shopper's copy, or the escrow asking for evidence. */
+export const disputeKnown = (o: Pick<UserOrder, 'dispute' | 'shopperDispute' | 'evidenceRequestedAt'>): boolean =>
+  !!(o.dispute || o.shopperDispute || o.evidenceRequestedAt);
 
 export interface CreateOrderInput {
   offer: Offer;
@@ -125,7 +181,8 @@ type Events = {
 const PREFIX = 'user/orders/';
 /** order.funded must reach the chain within this long after expires_at (§4.6). */
 const FUNDING_GRACE_SECONDS = 3600;
-const PRE_FUNDING: readonly UserOrderStatus[] = ['requested', 'quoted', 'rejected', 'accepted'];
+const PRE_FUNDING: readonly UserOrderStatus[] = ['requested', 'quoted', 'rejected', 'accepted', 'funding'];
+const DROPPED_KEPT = 20;
 
 export interface UserClientOptions {
   deployments?: Deployments;
@@ -141,6 +198,8 @@ export interface UserClientOptions {
 export class UserClient extends Emitter<Events> {
   private readonly lock = new KeyedMutex();
   private unsubscribe?: () => void;
+  private unaccept?: () => void;
+  private unsubscribeDropped?: () => void;
   private poller?: ReturnType<typeof setInterval>;
   private polling = false;
 
@@ -156,6 +215,14 @@ export class UserClient extends Emitter<Events> {
     this.unsubscribe ??= this.s.messenger.on('message', (m) => {
       void this.onMessage(m).catch((error) => this.emit('error', { orderId: m.orderId, error }));
     });
+    // §4.10: we take messages about our orders from their shopper and escrow; nothing else.
+    this.unaccept ??= this.s.addAcceptor(async (inner, meta) => {
+      const o = await this.getOrder(meta.orderId);
+      return o && (inner.pubkey === o.shopper || inner.pubkey === o.escrow) ? 'counterparty' : 'reject';
+    });
+    this.unsubscribeDropped ??= this.s.messenger.on('dropped', (d) => {
+      void this.onDropped(d.inner, d.reason).catch((error) => this.emit('error', { error }));
+    });
     const every = this.opts.chainPollMs ?? 5000;
     if (every > 0 && !this.poller) {
       this.poller = setInterval(() => void this.pollSettlements(), every);
@@ -167,6 +234,10 @@ export class UserClient extends Emitter<Events> {
   detach(): void {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    this.unaccept?.();
+    this.unaccept = undefined;
+    this.unsubscribeDropped?.();
+    this.unsubscribeDropped = undefined;
     if (this.poller) clearInterval(this.poller);
     this.poller = undefined;
   }
@@ -217,6 +288,8 @@ export class UserClient extends Emitter<Events> {
   // ---------- actions ----------
 
   async createOrder(input: CreateOrderInput): Promise<UserOrder> {
+    const itemsProblem = requestItemsProblem(input.items);
+    if (itemsProblem) throw new Error(itemsProblem);
     const orderId = newOrderId();
     const { entry } = input.offer;
     const me = this.s.keys;
@@ -272,9 +345,18 @@ export class UserClient extends Emitter<Events> {
       timeline: [{ at: now, kind: MSG.request, text: '注文を依頼しました' }],
     };
     await this.save(order);
-    await this.s.messenger.sendInner(inner);
-    await this.s.messenger.sendInner(escrowKeyInner);
+    // A failed publish leaves the order in 'requested' with the error; resendRequest() or cancel() go on from there.
+    await this.resendRequest(orderId).catch(() => undefined);
     return (await this.getOrder(orderId)) ?? order;
+  }
+
+  /** (Re)send order.request and order.escrow_key, e.g. after the first publish failed (both are retried until acked). */
+  async resendRequest(orderId: string): Promise<UserOrder> {
+    return this.mutate(orderId, async (o) => {
+      if (o.status !== 'requested') throw new Error(`the request was answered already (status ${o.status})`);
+      await this.s.messenger.sendInner(o.requestInner);
+      if (o.escrowKeyInner) await this.s.messenger.sendInner(o.escrowKeyInner);
+    });
   }
 
   /** Re-run quote validation (e.g. after changing rate sources). */
@@ -304,10 +386,13 @@ export class UserClient extends Emitter<Events> {
 
   async cancel(orderId: string, reason = 'cancelled by user'): Promise<UserOrder> {
     return this.mutate(orderId, async (o) => {
-      if (o.funded || o.fundingProgress) throw new Error('cannot cancel after funding');
-      await this.send(o, o.shopper, MSG.cancel, { reason });
+      // Funding has started only once a transaction exists; until then nothing of ours is locked.
+      if (o.funded || fundingStarted(o)) throw new Error('cannot cancel after funding');
+      if (!PRE_FUNDING.includes(o.status)) throw new Error(`cannot cancel in status ${o.status}`);
       o.status = 'cancelled';
-      this.log(o, MSG.cancel, `取り消しました: ${reason}`);
+      // Telling the shopper is best effort: an order whose request never got out must still be cancellable.
+      const told = await this.send(o, o.shopper, MSG.cancel, { reason }).then(() => true, () => false);
+      this.log(o, MSG.cancel, `取り消しました: ${reason}${told ? '' : '（shopper への通知は送れませんでした）'}`);
     });
   }
 
@@ -317,20 +402,51 @@ export class UserClient extends Emitter<Events> {
       if (o.status !== 'accepted' && o.status !== 'funding') throw new Error(`cannot fund in status ${o.status}`);
       if (!o.quoteCheck?.ok) throw new Error('quote failed validation');
       const q = o.quote!;
-      if (!o.fundingProgress && q.expires_at && q.expires_at + FUNDING_GRACE_SECONDS < nowSeconds()) {
+      // A funding already under way is finished whatever the quote's age: the money may be in the escrow output.
+      if (!fundingStarted(o) && q.expires_at && q.expires_at + FUNDING_GRACE_SECONDS < nowSeconds()) {
         throw new Error('the quote expired too long ago to fund; ask for a new quote');
       }
       o.status = 'funding';
-      o.fundingProgress ??= {};
       await this.save(o);
       const funded = o.payment === 'btc-signet' ? await this.fundBtc(o, q) : await this.fundUsdc(o, q);
-      o.funded = funded;
-      o.fundedInner = await this.send(o, o.shopper, MSG.funded, funded);
-      const notice: EscrowNotice = { request: o.requestInner, quote: o.quoteInner!, accept: o.acceptInner!, funded: o.fundedInner };
-      await this.send(o, o.escrow, MSG.escrowNotice, notice);
-      o.status = 'funded';
+      await this.announceFunding(o, funded);
       this.log(o, MSG.funded, `入金しました (${funded.asset === 'btc-signet' ? funded.txid : funded.fund_tx})`);
     });
+  }
+
+  /** order.funded to the shopper and escrow.notice to the escrow (§4.6, §4.7). */
+  private async announceFunding(o: UserOrder, funded: OrderFunded): Promise<void> {
+    const fundedInner = o.fundedInner ?? (await this.s.messenger.sign(o.shopper, o.id, MSG.funded, funded));
+    o.funded = funded;
+    o.fundedInner = fundedInner;
+    if (!o.messages.some((m) => m.id === fundedInner.id)) o.messages.push(fundedInner);
+    // Stored before publishing: the shopper's replies may beat our publish, and a retry reuses the same inner.
+    await this.save(o);
+    await this.s.messenger.sendInner(fundedInner);
+    const notice: EscrowNotice = { request: o.requestInner, quote: o.quoteInner!, accept: o.acceptInner!, funded: fundedInner };
+    await this.send(o, o.escrow, MSG.escrowNotice, notice);
+    if (['accepted', 'funding'].includes(o.status)) o.status = 'funded';
+  }
+
+  /**
+   * An interrupted funding whose escrow output is on chain: finish it (order.funded, escrow.notice) so the
+   * dispute and T2 refund work. Throws when nothing was funded.
+   */
+  private async ensureFunded(o: UserOrder): Promise<OrderFunded> {
+    if (o.funded) return o.funded;
+    const f = provisionalFunding(o);
+    if (!f) throw new Error('not funded');
+    const lock = parseUnits(o.quote!.lock_amount!);
+    if (f.asset === 'btc-signet') {
+      const tx = await this.chain().txHex(f.txid).catch(() => undefined);
+      if (!tx) throw new Error(`the funding transaction ${f.txid} is not on chain`);
+    } else {
+      const moved = await this.evm().usdcTransferredIn(f.fund_tx as Hex, f.safe as `0x${string}`, this.s.keys.evmAddress).catch(() => 0n);
+      if (moved < lock) throw new Error(`the funding transaction ${f.fund_tx} did not move lock_amount into the Safe`);
+    }
+    await this.announceFunding(o, f);
+    this.log(o, MSG.funded, `中断した入金をチェーンで確認しました (${f.asset === 'btc-signet' ? f.txid : f.fund_tx})`);
+    return f;
   }
 
   /** Sign the payout to the shopper and send order.release (§4.3, §5.2, §6.4). */
@@ -370,21 +486,27 @@ export class UserClient extends Emitter<Events> {
     p: { claim: DisputeOpen['claim']; text: string; requestedSplit?: { user: string; shopper: string } },
   ): Promise<UserOrder> {
     return this.mutate(orderId, async (o) => {
-      if (!o.funded) throw new Error('nothing to dispute before funding');
+      if (!o.funded && !provisionalFunding(o)) throw new Error('nothing to dispute before funding');
       if (o.escrowSpent) throw new Error('the escrow output has already been paid out');
-      const body: DisputeOpen = { claim: p.claim, text: p.text, requested_split: p.requestedSplit, evidence: this.evidence(o) };
+      await this.ensureFunded(o);
+      // §4.9: the first part goes with the claim; further messages follow as dispute.evidence.
+      const [first, ...more] = this.evidenceParts(o);
+      const body: DisputeOpen = { claim: p.claim, text: p.text, requested_split: p.requestedSplit, evidence: first };
       const inner = await this.send(o, o.escrow, MSG.disputeOpen, body);
+      for (const part of more) await this.send(o, o.escrow, MSG.evidence, part);
       await this.send(o, o.shopper, MSG.disputeOpen, body);
       o.dispute = { open: body, inner };
-      o.status = 'disputed';
-      this.log(o, MSG.disputeOpen, `紛争を申し立てました (${p.claim})`);
+      // §4.8: a dispute opened after a ruling does not hide the countersignature.
+      if (!o.ruling) o.status = 'disputed';
+      this.log(o, MSG.disputeOpen, `紛争を申し立てました (${p.claim})${more.length ? `（証拠は ${more.length + 1} 通に分けて送りました）` : ''}`);
+      this.adoptPendingRuling(o);
     });
   }
 
-  /** Answer an evidence request: resend everything we have. */
+  /** Answer an evidence request: resend everything we have (split to fit, §4.9). */
   async sendEvidence(orderId: string): Promise<UserOrder> {
     return this.mutate(orderId, async (o) => {
-      await this.send(o, o.escrow, MSG.evidence, this.evidence(o));
+      for (const part of this.evidenceParts(o)) await this.send(o, o.escrow, MSG.evidence, part);
       this.log(o, MSG.evidence, '証拠を送りました');
     });
   }
@@ -420,13 +542,12 @@ export class UserClient extends Emitter<Events> {
           { signer: o.quote!.escrow_evm_address as `0x${string}`, signature: r.signature as Hex },
         ]);
       }
-      o.settledTxid = txid;
-      o.escrowSpent = { txid, at: nowSeconds() };
-      o.pendingSettlement = undefined;
+      this.log(o, MSG.countersigned, `裁定に連署して放送しました (${txid})`);
+      // A relay or node accepting the broadcast is not a spend: 'settled' waits for the chain (§4.8).
+      o.pendingSettlement = { kind: 'settled', txid, from: await this.s.pubkey(), at: nowSeconds() };
+      await this.checkSettlement(o).catch((err) => this.log(o, MSG.countersigned, `チェーンの確認に失敗: ${(err as Error).message}`));
       await this.send(o, o.shopper, MSG.countersigned, { txid });
       await this.send(o, o.escrow, MSG.countersigned, { txid });
-      o.status = 'settled';
-      this.log(o, MSG.countersigned, `裁定に連署して放送しました (${txid})`);
     });
   }
 
@@ -461,23 +582,24 @@ export class UserClient extends Emitter<Events> {
           { signer, signature: offer.body.signature as Hex },
         ]);
       }
-      o.escrowSpent = { txid: o.refundTxid, at: nowSeconds() };
-      o.status = 'refunded';
       this.log(o, MSG.refund, `shopper の払い戻しに連署しました (${o.refundTxid})`);
+      o.pendingSettlement = { kind: 'refunded', txid: o.refundTxid, from: await this.s.pubkey(), at: nowSeconds() };
+      await this.checkSettlement(o).catch((err) => this.log(o, MSG.refund, `チェーンの確認に失敗: ${(err as Error).message}`));
     });
   }
 
   /** After T2 the user alone can take everything back (§5.1 T2 path, §6.3 refundToUser). */
   async refundAfterTimelock(orderId: string): Promise<UserOrder> {
     return this.mutate(orderId, async (o) => {
-      if (!o.funded) throw new Error('not funded');
+      // An interrupted funding must not block the refund: finish it from the chain first.
+      const funded = await this.ensureFunded(o);
       const q = o.quote!;
       const t2 = q.timelock!.t2;
       let txid: string;
       if (o.payment === 'btc-signet') {
         const tip = await this.chain().tipHeight();
         if (tip < t2) throw new Error(`T2 not reached: height ${tip} < ${t2}`);
-        const f = o.funded as Extract<OrderFunded, { asset: 'btc-signet' }>;
+        const f = funded as Extract<OrderFunded, { asset: 'btc-signet' }>;
         const lock = parseUnits(q.lock_amount!);
         const reserve = parseUnits(q.payout_fee_reserve ?? '0');
         const tx = buildEscrowSpend({
@@ -493,13 +615,13 @@ export class UserClient extends Emitter<Events> {
       } else {
         const now = await this.evm().blockTimestamp();
         if (now < BigInt(t2)) throw new Error(`T2 not reached: ${now} < ${t2}`);
-        const f = o.funded as Extract<OrderFunded, { asset: 'usdc-evm' }>;
+        const f = funded as Extract<OrderFunded, { asset: 'usdc-evm' }>;
         txid = await this.evm().refundToUser(f.safe as `0x${string}`);
       }
       o.refundTxid = txid;
-      o.escrowSpent = { txid, at: nowSeconds() };
-      o.status = 'refunded';
-      this.log(o, 'refund', `T2 経過後に返金を受けました (${txid})`);
+      this.log(o, 'refund', `T2 経過後の返金を放送しました (${txid})`);
+      o.pendingSettlement = { kind: 'refunded', txid, from: await this.s.pubkey(), at: nowSeconds() };
+      await this.checkSettlement(o).catch((err) => this.log(o, 'refund', `チェーンの確認に失敗: ${(err as Error).message}`));
     });
   }
 
@@ -590,25 +712,21 @@ export class UserClient extends Emitter<Events> {
           await this.onRefundOffer(o, m.inner, m.body as SignedPayout);
           break;
         case MSG.evidenceRequest:
-          if (!fromEscrow) break;
+          if (!fromEscrow || !o.funded) break;
+          o.evidenceRequestedAt ??= nowSeconds();
           this.log(o, m.type, `escrow が証拠を求めています: ${(m.body as { want: string[] }).want.join(', ')}`);
+          this.adoptPendingRuling(o);
           break;
         case MSG.ruling: {
-          if (!fromEscrow) break;
-          const r = m.body as DisputeRuling;
-          // §4.8: a ruling only answers an open dispute, and the escrow rules once.
-          if (!o.dispute && !o.shopperDispute) {
-            this.log(o, m.type, '紛争が無いのに裁定が届いたので無視しました');
-            break;
-          }
-          if (o.ruling) {
+          if (!fromEscrow || !o.funded) break;
+          // §4.8: the escrow rules once; a second (conflicting) signed split is ignored.
+          if (o.ruling || o.pendingRuling) {
             this.log(o, m.type, '2 回目の裁定は無視しました');
             break;
           }
-          o.ruling = r;
-          o.rulingInner = m.inner;
-          if (!o.escrowSpent) o.status = 'ruled';
-          this.log(o, m.type, `裁定: user ${r.split.user} / shopper ${r.split.shopper} — ${r.reason}`);
+          // A ruling that beats the news of the dispute (the shopper's copy may still be on its way) is kept, not dropped.
+          o.pendingRuling = { body: m.body as DisputeRuling, inner: m.inner, receivedAt: nowSeconds() };
+          if (!this.adoptPendingRuling(o)) this.log(o, m.type, '紛争を知る前に裁定が届きました。紛争を確かめられるまで保留します');
           break;
         }
         case MSG.countersigned:
@@ -621,7 +739,9 @@ export class UserClient extends Emitter<Events> {
           if (!fromShopper || !o.funded) break;
           o.shopperDispute ??= { open: m.body as DisputeOpen, inner: m.inner };
           this.log(o, m.type, `shopper が紛争を申し立てました (${(m.body as DisputeOpen).claim})`);
-          if (!o.escrowSpent && !o.dispute) o.status = 'disputed';
+          // §4.8: never back from 'ruled' — that would hide the countersignature.
+          if (!o.escrowSpent && !o.dispute && !o.ruling) o.status = 'disputed';
+          this.adoptPendingRuling(o);
           break;
         case MSG.chat:
           this.log(o, m.type, `${fromShopper ? 'shopper' : 'escrow'}: ${(m.body as { text: string }).text}`);
@@ -658,21 +778,29 @@ export class UserClient extends Emitter<Events> {
     let chainNow: number | undefined;
     try {
       chainNow = o.payment === 'btc-signet' ? await this.chain().tipHeight() : Number(await this.evm().blockTimestamp());
+      // §4.5.1 compares timelocks with the chain's "now"; a chain API whose clock is off could fake it.
+      const chainTime = o.payment === 'btc-signet' ? await this.chain().tipTime() : chainNow;
+      const skew = clockSkewProblem(chainTime, nowSeconds(), this.s.config.maxClockSkewSeconds);
+      if (skew) infraErrors.push(skew);
     } catch (err) {
       infraErrors.push(`cannot read the current ${o.payment === 'btc-signet' ? 'block height' : 'chain time'}: ${(err as Error).message}`);
     }
     const deployments = this.opts.deployments ?? this.s.evm?.deployments;
+    let proxyCreationCode: Hex = SAFE_PROXY_CREATION_CODE;
     if (o.payment === 'usdc-evm') {
-      // The Safe address is predicted with the pinned Safe v1.4.1 proxy code; an RPC that disagrees is refused.
+      // The Safe address is predicted with the factory's proxy code, but only with a code we know (§6.2).
       if (this.s.evm) {
-        const rpcCode = await this.s.evm.proxyCreationCode().catch(() => undefined);
-        if (rpcCode === undefined) infraWarnings.push('could not read proxyCreationCode from the factory');
-        else if (rpcCode.toLowerCase() !== SAFE_PROXY_CREATION_CODE.toLowerCase()) infraErrors.push('the factory proxyCreationCode differs from Safe v1.4.1');
+        try {
+          proxyCreationCode = knownProxyCreationCode(await this.s.evm.proxyCreationCode());
+        } catch (err) {
+          infraErrors.push(`cannot use the factory's proxyCreationCode: ${(err as Error).message}`);
+        }
         if (deployments && this.s.evm.chainId !== deployments.chain_id) infraErrors.push(`EVM RPC chain ${this.s.evm.chainId} != deployments chain ${deployments.chain_id}`);
       }
+      // The signed operator list must vouch for every contract address the Safe depends on.
       const listEvm = snap?.lists.get(o.entry.provenance.operator)?.content.chain?.evm;
       if (deployments && listEvm) infraErrors.push(...crossCheckDeployments(deployments, listEvm));
-      else if (deployments) infraWarnings.push('the operator list has no chain.evm; contract addresses are not cross-checked');
+      else if (deployments) infraErrors.push('the operator list has no chain.evm, so the contract addresses cannot be checked');
     }
     const check = await checkQuote({
       orderId: o.id,
@@ -684,7 +812,7 @@ export class UserClient extends Emitter<Events> {
       userBtcPubkey: o.payment === 'btc-signet' ? this.s.keys.orderKey(o.id).publicKey : undefined,
       userEvmAddress: o.payment === 'usdc-evm' ? this.s.keys.evmAddress : undefined,
       deployments,
-      proxyCreationCode: SAFE_PROXY_CREATION_CODE,
+      proxyCreationCode,
       rates: this.s.rates,
       chainNow,
       timelockPolicy: this.s.config.timelockPolicy,
@@ -709,6 +837,35 @@ export class UserClient extends Emitter<Events> {
     this.log(o, MSG.refund, problems.length
       ? `shopper の払い戻しの提案を検証できませんでした: ${problems.join('; ')}`
       : 'shopper が払い戻しを提案しています。内容を確かめて連署してください');
+  }
+
+  /** Take a held-back ruling once a dispute is known (§4.8). Returns whether the order now has it. */
+  private adoptPendingRuling(o: UserOrder): boolean {
+    const r = o.pendingRuling;
+    if (!r || o.ruling || !disputeKnown(o)) return false;
+    o.ruling = r.body;
+    o.rulingInner = r.inner;
+    o.pendingRuling = undefined;
+    if (!o.escrowSpent) o.status = 'ruled';
+    this.log(o, MSG.ruling, `裁定: user ${r.body.split.user} / shopper ${r.body.split.shopper} — ${r.body.reason}`);
+    return true;
+  }
+
+  /** Record a dropped message of one of our orders' parties, so the user sees that something did not arrive. */
+  private async onDropped(inner: Inner, reason: string): Promise<void> {
+    const { orderId, type } = innerMeta(inner);
+    const existing = orderId ? await this.getOrder(orderId) : undefined;
+    if (!existing || (inner.pubkey !== existing.shopper && inner.pubkey !== existing.escrow)) return;
+    await this.lock.run(orderId, async () => {
+      const o = await this.getOrder(orderId);
+      if (!o) return;
+      const list = (o.dropped ??= []);
+      // The same inner arrives from several relays and as resends; one notice per inner is enough.
+      if (list.some((d) => d.type === type && d.reason === reason && d.at > nowSeconds() - 60)) return;
+      list.push({ at: nowSeconds(), type, reason, from: inner.pubkey === o.shopper ? 'shopper' : 'escrow' });
+      if (list.length > DROPPED_KEPT) list.splice(0, list.length - DROPPED_KEPT);
+      await this.save(o);
+    });
   }
 
   // ---------- funding ----------
@@ -744,16 +901,23 @@ export class UserClient extends Emitter<Events> {
     const lock = parseUnits(q.lock_amount!);
     const fee = parseUnits(q.escrow_upfront_fee ?? '0');
     const p = (o.fundingProgress ??= {});
-    const persist = (k: 'deployTx' | 'fundTx' | 'feeTx') => async (hash: Hex) => {
-      p[k] = hash;
+    type Step = 'deploy' | 'fund' | 'fee';
+    // Each step persists the signed transaction before sending it; a retry sends that one again, never a new one.
+    const persist = (step: Step) => async (tx: SignedTx) => {
+      p[`${step}Tx` as const] = tx.hash;
+      p[`${step}Raw` as const] = tx.raw;
       await this.save(o);
     };
-    // Each step persists its hash before waiting; on retry we wait for that hash or read chain state instead of resending.
-    if (p.deployTx && p.deployTx !== 'already-deployed') await evm.confirm(p.deployTx as Hex).catch(() => undefined);
+    /** Finish a step signed earlier: wait for its receipt, sending the persisted raw tx again if the node lost it. */
+    const resume = async (step: Step): Promise<void> => {
+      const hash = p[`${step}Tx` as const] as Hex;
+      const raw = p[`${step}Raw` as const] as Hex | undefined;
+      if ((await evm.receiptOk(hash)) === undefined && raw && !(await evm.knowsTx(hash))) await evm.sendSigned({ hash, raw });
+      await evm.confirm(hash);
+    };
+    if (p.deployTx && p.deployTx !== 'already-deployed') await resume('deploy').catch(() => undefined);
     if (!(await evm.isDeployed(safe))) {
-      if (p.deployTx && p.deployTx !== 'already-deployed' && (await evm.receiptOk(p.deployTx as Hex)) === undefined) {
-        throw new Error(`Safe deployment ${p.deployTx} is still pending; try again later`);
-      }
+      if (p.deployTx && p.deployTx !== 'already-deployed') throw new Error(`Safe deployment ${p.deployTx} has not been mined; try again later`);
       await evm.deploySafe({
         user: this.s.keys.evmAddress,
         shopper: q.shopper_evm_address as `0x${string}`,
@@ -761,14 +925,14 @@ export class UserClient extends Emitter<Events> {
         t1: BigInt(q.timelock!.t1),
         t2: BigInt(q.timelock!.t2),
         orderId: o.id,
-      }, persist('deployTx'));
+      }, persist('deploy'));
       if (!(await evm.isDeployed(safe))) throw new Error('Safe was not deployed at the predicted address');
     } else if (!p.deployTx) {
       p.deployTx = 'already-deployed';
       await this.save(o);
     }
     if (p.fundTx) {
-      await evm.confirm(p.fundTx as Hex);
+      await resume('fund');
     } else {
       const held = await evm.usdcBalance(safe);
       if (held >= lock) {
@@ -777,37 +941,41 @@ export class UserClient extends Emitter<Events> {
         if (!found) throw new Error('the Safe already holds the funds but our transfer was not found; not sending again');
         p.fundTx = found;
         await this.save(o);
-      } else if (held > 0n) {
-        throw new Error(`the Safe holds ${held} of ${lock}; not sending again automatically`);
       } else {
-        await evm.transferUsdc(safe, lock, persist('fundTx'));
+        // Someone else's dust in the Safe (§4.8) does not count as our funding.
+        await evm.transferUsdc(safe, lock, persist('fund'));
       }
     }
     if (fee > 0n) {
-      if (p.feeTx) await evm.confirm(p.feeTx as Hex);
-      else await evm.transferUsdc(q.escrow_evm_address as `0x${string}`, fee, persist('feeTx'));
+      if (p.feeTx) await resume('fee');
+      else await evm.transferUsdc(q.escrow_evm_address as `0x${string}`, fee, persist('fee'));
     }
     return { asset: 'usdc-evm', safe, deploy_tx: p.deployTx!, fund_tx: p.fundTx!, fee_tx: p.feeTx ?? '', amount: lock.toString() };
   }
 
   // ---------- helpers ----------
 
-  /** Promote a pending completed / countersigned claim to a terminal status once the chain agrees (§4.8). */
+  /** Promote a pending payout (a peer's claim or our own broadcast) to a terminal status once the chain agrees (§4.8). */
   private async checkSettlement(o: UserOrder): Promise<void> {
     const claim = o.pendingSettlement;
     if (!claim || !o.funded) return;
-    const res = await escrowSpent({ chain: this.s.chain, evm: this.s.evm, funded: o.funded, claimedTx: claim.txid });
+    const res = await escrowSpent({ chain: this.s.chain, evm: this.s.evm, funded: o.funded, lock: parseUnits(o.quote!.lock_amount!), claimedTx: claim.txid });
     if (!res.spent) return;
     o.escrowSpent = { txid: res.txid, at: nowSeconds() };
     o.pendingSettlement = undefined;
+    const txid = res.txid ?? claim.txid;
     if (claim.kind === 'completed') {
-      o.completedTxid = res.txid ?? claim.txid;
+      o.completedTxid = txid;
       o.status = 'completed';
-      this.log(o, MSG.completed, `完了をチェーンで確認しました (${o.completedTxid})`);
+      this.log(o, MSG.completed, `完了をチェーンで確認しました (${txid})`);
+    } else if (claim.kind === 'refunded') {
+      o.refundTxid = txid;
+      o.status = 'refunded';
+      this.log(o, MSG.refund, `返金をチェーンで確認しました (${txid})`);
     } else {
-      o.settledTxid = res.txid ?? claim.txid;
+      o.settledTxid = txid;
       o.status = 'settled';
-      this.log(o, MSG.countersigned, `裁定の精算をチェーンで確認しました (${o.settledTxid})`);
+      this.log(o, MSG.countersigned, `裁定の精算をチェーンで確認しました (${txid})`);
     }
   }
 
@@ -860,22 +1028,25 @@ export class UserClient extends Emitter<Events> {
     } catch (err) {
       return [`cannot read the Safe state: ${(err as Error).message}`];
     }
-    return safePayoutProblems(tx, { usdc: d.usdc, multiSend: d.safe.multisend_call_only, nonce, balance, transfers });
+    const lock = parseUnits(o.quote!.lock_amount!);
+    return safePayoutProblems(tx, { usdc: d.usdc, multiSend: d.safe.multisend_call_only, nonce, balance, lock, transfers });
   }
 
   private async rulingProblems(o: UserOrder, r: DisputeRuling): Promise<string[]> {
     const problems: string[] = [];
     const q = o.quote!;
-    if (!o.dispute && !o.shopperDispute) problems.push('there is no open dispute for this order');
+    if (!disputeKnown(o)) problems.push('there is no open dispute for this order');
     if (o.escrowSpent) return [...problems, 'the escrow output has already been paid out'];
     const split = { user: parseUnits(r.split.user), shopper: parseUnits(r.split.shopper), fee: parseUnits(r.split.escrow_fee) };
+    const total = split.user + split.shopper + split.fee;
     const lock = parseUnits(q.lock_amount!);
     const reserve = o.payment === 'btc-signet' ? parseUnits(q.payout_fee_reserve ?? '0') : 0n;
-    const distributable = lock - reserve;
-    if (split.user + split.shopper + split.fee !== distributable) problems.push('split does not add up to the escrow balance');
+    // §4.8: BTC splits the escrow output minus the reserve; USDC the Safe's balance when the escrow signed,
+    // which may exceed lock_amount (dust); safeProblems checks lock_amount ≤ total ≤ balance now.
+    if (o.payment === 'btc-signet' && total !== lock - reserve) problems.push(`split adds up to ${total}, not the escrow balance ${lock - reserve}`);
     const bps = o.escrowProfile?.dispute_fee_bps;
     if (bps === undefined) problems.push('escrow profile unknown: cannot bound the escrow fee');
-    else if (split.fee * 10000n > BigInt(bps) * distributable) problems.push(`escrow_fee ${split.fee} exceeds dispute_fee_bps ${bps}`);
+    else if (split.fee * 10000n > BigInt(bps) * total) problems.push(`escrow_fee ${split.fee} exceeds dispute_fee_bps ${bps}`);
     if (o.payment === 'btc-signet') {
       if (!r.psbt) return [...problems, 'no PSBT'];
       const f = o.funded as Extract<OrderFunded, { asset: 'btc-signet' }>;
@@ -911,12 +1082,19 @@ export class UserClient extends Emitter<Events> {
   }
 
   private evidence(o: UserOrder): DisputeEvidence {
-    return {
+    return evidenceWithoutInlineData({
       messages: evidenceMessages(o),
       tracking: o.tracking,
       purchase_evidence: o.purchased?.evidence ?? [],
       delivery_key_for_escrow: o.keyForEscrow,
-    };
+    });
+  }
+
+  /** The evidence split into bodies that fit a message (§4.9); what cannot fit at all is noted on the order. */
+  private evidenceParts(o: UserOrder): DisputeEvidence[] {
+    const { parts, skipped } = splitEvidence(this.evidence(o));
+    if (skipped.length) this.log(o, MSG.evidence, `大きすぎて証拠に入れられないメッセージが ${skipped.length} 通ありました`);
+    return parts;
   }
 
   private escrowKeys(o: UserOrder): EscrowKeys {

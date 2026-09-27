@@ -21,6 +21,15 @@ export function str(max = 1024, re?: RegExp): Check<string> {
   };
 }
 
+/** A string of at most `maxBytes` UTF-8 bytes (spec limits count bytes, not UTF-16 units). */
+export function utf8Str(maxBytes: number): Check<string> {
+  return (v, path = '') => {
+    if (typeof v !== 'string') return fail(path, 'expected a string');
+    if (new TextEncoder().encode(v).length > maxBytes) return fail(path, `longer than ${maxBytes} bytes`);
+    return v;
+  };
+}
+
 export function int(min = 0, max = Number.MAX_SAFE_INTEGER): Check<number> {
   return (v, path = '') => {
     if (typeof v !== 'number' || !Number.isSafeInteger(v)) return fail(path, 'expected an integer');

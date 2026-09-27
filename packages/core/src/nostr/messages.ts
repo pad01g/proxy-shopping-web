@@ -216,9 +216,10 @@ export const MSG = {
 
 /**
  * §4.9: NIP-44 encrypts at most 64 KiB and relays commonly cap content at 65535 bytes; the wrap grows to
- * about 2.3x the inner, so a signed inner must stay at or below this many bytes.
+ * about 2.3x the inner (inners between ~28.7 KB and 30 KB already pad past 65535), so a signed inner must
+ * stay at or below this many bytes.
  */
-export const MAX_INNER_BYTES = 30_000;
+export const MAX_INNER_BYTES = 28_000;
 
 /** Messages that embed other signed messages; they are left out of evidence lists so evidence stays small. */
 export const CONTAINER_TYPES: readonly string[] = ['escrow.notice', 'dispute.open', 'dispute.evidence', 'report', 'attachment'];

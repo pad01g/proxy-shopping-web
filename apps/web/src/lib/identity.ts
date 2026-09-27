@@ -20,8 +20,10 @@ export interface StoredIdentity {
   backedUp: boolean;
   vault?: EncryptedSecret;
   mnemonic?: string;
-  /** Nostr pubkey (not secret), so logout can find the per-identity database while locked. */
+  /** Nostr pubkey of the mnemonic (not secret). With NIP-07 the identity (and its database) is the extension's key. */
   pubkey?: string;
+  /** The per-identity database last opened for this identity, so logout deletes the right one while locked. */
+  dbName?: string;
 }
 
 let db: Promise<IndexedDBStorage> | undefined;
@@ -56,3 +58,30 @@ export async function forgetIdentity(): Promise<void> {
 
 /** One database per identity so importing another mnemonic never mixes orders. */
 export const identityDbName = (pubkey: string): string => `proxy-shopping-${pubkey.slice(0, 16)}`;
+
+/** Remember which database the running identity uses (with NIP-07 it is not derivable from the mnemonic). */
+export async function rememberDbName(dbName: string): Promise<StoredIdentity | undefined> {
+  const s = await loadStoredIdentity();
+  if (!s || s.dbName === dbName) return s;
+  const next = { ...s, dbName };
+  await (await store()).put('identity', next);
+  return next;
+}
+
+/**
+ * The database to delete on logout: the running one, else the one remembered, else — for a NIP-07 identity —
+ * the extension's key (never the mnemonic's, which names another identity's database).
+ */
+export async function logoutDbName(
+  s: StoredIdentity | undefined,
+  running: string | undefined,
+  nip07?: { getPublicKey(): Promise<string> },
+): Promise<string | undefined> {
+  if (running) return running;
+  if (s?.dbName) return s.dbName;
+  if (s?.useNip07) {
+    const pk = await nip07?.getPublicKey().catch(() => undefined);
+    return pk ? identityDbName(pk) : undefined;
+  }
+  return s?.pubkey ? identityDbName(s.pubkey) : undefined;
+}

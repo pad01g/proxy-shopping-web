@@ -1,5 +1,6 @@
 import type { ChainApi } from '../btc/esplora.js';
 import type { EvmClient } from '../evm/chain.js';
+import type { Deployments } from '../evm/deployments.js';
 import { CoordinatorClient } from '../flows/coordinator.js';
 import { EscrowClient } from '../flows/escrow.js';
 import { OperatorClient } from '../flows/operator.js';
@@ -39,6 +40,10 @@ export interface WorldOptions {
   timelockPolicy?: TimelockPolicy;
   /** How often user / escrow re-check settlement claims on chain (ms). */
   chainPollMs?: number;
+  /** EVM contracts; the operator list then vouches for them in `chain.evm` (§2.3), as USDC orders require. */
+  deployments?: Deployments;
+  /** The users' max_clock_skew_seconds; defaults to LAB_MAX_CLOCK_SKEW_SECONDS (lab chains warp time). */
+  maxClockSkewSeconds?: number;
 }
 
 /** `timelock_policy` of the lab web config (proxy-shopping-go/lab/web-config.json). */
@@ -50,6 +55,12 @@ export const LAB_TIMELOCK_POLICY: TimelockPolicy = {
   btc_max_t2_blocks: 1000,
   evm_max_t2_seconds: 86400,
 };
+
+/**
+ * `max_clock_skew_seconds` of the lab web config: anvil's time is advanced by tests and the lab signet mines
+ * on demand, so the chain clocks are far from the wall clock there (public networks keep the 2 h default).
+ */
+export const LAB_MAX_CLOCK_SKEW_SECONDS = 315_360_000;
 
 /**
  * A complete trust setup (coordinator → operator → list with shopper × escrow)
@@ -67,6 +78,7 @@ export async function createWorld(o: WorldOptions) {
       config: {
         network, relays: o.relays, coordinators: [coordinatorPk], retryIntervalMs: o.retryIntervalMs ?? 1000,
         timelockPolicy: o.timelockPolicy ?? LAB_TIMELOCK_POLICY, allowPrivateEndpoints: true,
+        maxClockSkewSeconds: o.maxClockSkewSeconds ?? LAB_MAX_CLOCK_SKEW_SECONDS,
       },
       chain: o.chain,
       evm: o.evm?.(keys[name]),
@@ -77,8 +89,17 @@ export async function createWorld(o: WorldOptions) {
   await new CoordinatorClient(sessions['coordinator-1']).delegate(keys['operator-1'].nostrPublicKey, 'lab');
   const operator = new OperatorClient(sessions['operator-1']).attach();
   const content = await operator.draft('Kanto operator');
+  const d = o.deployments;
   await operator.publish({
     ...content,
+    ...(d ? {
+      chain: {
+        evm: {
+          chain_id: d.chain_id, rpc: [], usdc: d.usdc,
+          safe: { ...d.safe, module: d.module, setup: d.setup },
+        },
+      },
+    } : {}),
     regions: ['JP-13'],
     entries: [{
       region: 'JP-13',
