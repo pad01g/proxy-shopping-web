@@ -1,9 +1,10 @@
 import type { Hex } from 'viem';
 import { p2wshAddress, witnessScript } from '../btc/script.js';
-import { extractTx, finalizeEscrowInput, psbtFromBase64, signEscrowInput } from '../btc/spend.js';
+import { buildEscrowSpend, extractTx, finalizeEscrowInput, psbtFromBase64, psbtToBase64, signEscrowInput } from '../btc/spend.js';
 import { decryptAddress, unwrapDeliveryKey } from '../delivery/delivery.js';
 import { orderSafeAddress } from '../evm/safe.js';
-import { recoverSafeTxSigner, safeTxFromJson, signSafeTx } from '../evm/safetx.js';
+import { recoverSafeTxSigner, releaseSafeTx, safeTxFromJson, safeTxToJson, signSafeTx } from '../evm/safetx.js';
+import { verifyRequestKeyProof } from '../keys/proof.js';
 import type { Session } from '../flows/session.js';
 import { escrowPubkeyFromXpub } from '../keys/derive.js';
 import type { IncomingMessage } from '../nostr/messenger.js';
@@ -32,6 +33,8 @@ export interface FakeShopperOptions {
 interface ShopperOrder {
   request: OrderRequest;
   user: string;
+  /** order.escrow_key, kept for a dispute (§4.4). */
+  keyForEscrow?: string;
   quote?: OrderQuote;
   quoteId?: string;
   address?: Address;
@@ -63,6 +66,11 @@ export class FakeShopper {
         if (ord && m.from === ord.user) ord.quoteId = (m.body as { quote_id: string }).quote_id;
         return;
       }
+      case MSG.escrowKey: {
+        const ord = this.orders.get(m.orderId);
+        if (ord && m.from === ord.user) ord.keyForEscrow = (m.body as { key_for_escrow: string }).key_for_escrow;
+        return;
+      }
       case MSG.funded:
         return this.onFunded(m);
       case MSG.release:
@@ -72,6 +80,10 @@ export class FakeShopper {
 
   private async onRequest(m: IncomingMessage): Promise<void> {
     const req = m.body as OrderRequest;
+    if (!(await verifyRequestKeyProof(req, m.orderId, m.from))) {
+      await this.s.messenger.send(m.from, m.orderId, MSG.quote, { accept: false, reject_reason: 'invalid', detail: 'key_proof does not verify' });
+      return;
+    }
     const ord: ShopperOrder = { request: req, user: m.from };
     this.orders.set(m.orderId, ord);
     const key = await unwrapDeliveryKey(this.s.signer, m.from, req.delivery.key_for_shopper);
@@ -158,6 +170,42 @@ export class FakeShopper {
     await this.s.messenger.send(m.from, m.orderId, MSG.shipping, tracking('shipped'));
     await new Promise((r) => setTimeout(r, delay));
     await this.s.messenger.send(m.from, m.orderId, MSG.shipping, tracking('delivered'));
+  }
+
+  /**
+   * Offer the user a cooperative refund (order.refund): everything minus payout_fee_reserve back to
+   * the user — or, for tests, the (signed) BTC `outputs` given.
+   */
+  async offerRefund(orderId: string, opts: { outputs?: (user: string, lock: bigint, reserve: bigint) => Array<{ address: string; amount: bigint }> } = {}): Promise<void> {
+    const ord = this.orders.get(orderId);
+    if (!ord?.quote || !ord.funded) throw new Error('order not funded');
+    const q = ord.quote;
+    let body: SignedPayout;
+    if (ord.funded.asset === 'btc-signet') {
+      const lock = BigInt(q.lock_amount!);
+      const reserve = BigInt(q.payout_fee_reserve ?? '0');
+      const script = witnessScript({ user: fromHex(ord.request.user_btc_pubkey!), shopper: fromHex(q.shopper_btc_pubkey!), escrow: fromHex(q.escrow_btc_pubkey!) }, q.timelock!.t1, q.timelock!.t2);
+      const tx = buildEscrowSpend({
+        outpoint: { txid: ord.funded.txid, vout: ord.funded.vout ?? 0, amount: lock },
+        witnessScript: script,
+        outputs: opts.outputs?.(ord.request.user_btc_address!, lock, reserve) ?? [{ address: ord.request.user_btc_address!, amount: lock - reserve }],
+      });
+      signEscrowInput(tx, this.s.keys.orderKey(orderId).privateKey);
+      body = { asset: 'btc-signet', psbt: psbtToBase64(tx) };
+    } else {
+      const evm = this.s.evm!;
+      const safe = ord.funded.safe as `0x${string}`;
+      const tx = releaseSafeTx({ usdc: evm.deployments.usdc, to: ord.request.user_evm_address as `0x${string}`, amount: BigInt(q.lock_amount!), nonce: await evm.safeNonce(safe) });
+      body = { asset: 'usdc-evm', safe_tx: safeTxToJson(tx), signature: await signSafeTx(this.s.keys.evmAccount, tx, evm.chainId, safe) };
+    }
+    await this.s.messenger.send(ord.user, orderId, MSG.refund, body);
+  }
+
+  /** Claim completion without paying (a lying shopper), for tests. */
+  async claimCompleted(orderId: string, txid: string): Promise<void> {
+    const ord = this.orders.get(orderId);
+    if (!ord) throw new Error('unknown order');
+    await this.s.messenger.send(ord.user, orderId, MSG.completed, { txid });
   }
 
   private async onRelease(m: IncomingMessage): Promise<void> {

@@ -71,7 +71,9 @@ export function decodeMultiSend(data: Hex): MultiSendCall[] {
     if (bytes[i] !== 0) throw new Error('multisend: only CALL operations allowed');
     const to = hex(bytes.slice(i + 1, i + 21)) as `0x${string}`;
     const value = BigInt(hex(bytes.slice(i + 21, i + 53)));
+    if (i + 85 > bytes.length) throw new Error('multisend: truncated call header');
     const len = Number(BigInt(hex(bytes.slice(i + 53, i + 85))));
+    if (i + 85 + len > bytes.length) throw new Error('multisend: truncated call data');
     const data = hex(bytes.slice(i + 85, i + 85 + len));
     calls.push({ to, value, data });
     i += 85 + len;
@@ -92,8 +94,14 @@ export function splitSafeTx(p: {
   return baseTx(p.multiSend, encodeMultiSend(calls), 1, p.nonce ?? 0n);
 }
 
-/** ERC-20 transfers in a SafeTx (direct or via MultiSend), as (to, amount) pairs. */
-export function safeTxTransfers(tx: SafeTx, usdc: `0x${string}`): Array<{ to: `0x${string}`; amount: bigint }> {
+/**
+ * USDC transfers in a SafeTx as (to, amount) pairs. Only the two §4.10 shapes are accepted:
+ * operation 0 calling `usdc.transfer`, or operation 1 (delegatecall) to MultiSendCallOnly with
+ * nothing but `usdc.transfer` calls. Anything else throws.
+ */
+export function safeTxTransfers(tx: SafeTx, usdc: `0x${string}`, multiSend: `0x${string}`): Array<{ to: `0x${string}`; amount: bigint }> {
+  if (tx.operation === 1 && tx.to.toLowerCase() !== multiSend.toLowerCase()) throw new Error('delegatecall to a contract other than MultiSendCallOnly');
+  if (tx.operation === 0 && tx.to.toLowerCase() !== usdc.toLowerCase()) throw new Error('call to a contract other than USDC');
   const calls = tx.operation === 1 ? decodeMultiSend(tx.data) : [{ to: tx.to, data: tx.data, value: tx.value }];
   return calls.map((c) => {
     if (c.to.toLowerCase() !== usdc.toLowerCase() || (c.value ?? 0n) !== 0n) throw new Error('unexpected call target');

@@ -1,7 +1,7 @@
-import { innerMeta, isValidInner, type Address } from '@proxy-shopping/core/browser';
+import { evidenceIntegrity, innerMeta, isValidInner, type Address } from '@proxy-shopping/core/browser';
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { ActionButton, Field, Mono, Section } from '../components/ui';
+import { ActionButton, ErrorBoundary, Field, Mono, Section } from '../components/ui';
 import { formatAsset, formatTime, short, STATUS_LABEL } from '../lib/format';
 import { useLive, useRuntime } from '../state';
 
@@ -17,6 +17,8 @@ export function EscrowCasePage() {
   if (!c) return <p className="muted">案件を読み込み中…</p>;
 
   const q = c.quote;
+  // Only image types a browser renders without scripts; everything else is listed, not shown.
+  const IMAGE = /^image\/(png|jpeg|gif|webp)$/;
   const asset = c.request?.payment;
   const lock = q?.lock_amount ? BigInt(q.lock_amount) : 0n;
   const reserve = asset === 'btc-signet' && q?.payout_fee_reserve ? BigInt(q.payout_fee_reserve) : 0n;
@@ -27,6 +29,17 @@ export function EscrowCasePage() {
     <div data-testid="escrow-case" data-order-id={c.orderId}>
       <h1>案件 <Mono>{c.orderId}</Mono></h1>
       <p>状態: <span className="badge" data-testid="escrow-case-detail-status" data-status={c.status}>{STATUS_LABEL[c.status] ?? c.status}</span></p>
+      {c.rejected && <p className="banner error" data-testid="escrow-case-rejected">この案件は受けられません: {c.rejected}</p>}
+      {!!c.conflicts?.length && (
+        <div className="banner warn" data-testid="escrow-conflicts">入金の通知と食い違う証拠（無視しました）:<ul>{c.conflicts.map((x) => <li key={x}>{x}</li>)}</ul></div>
+      )}
+      {c.verification && (
+        <div className={`banner ${c.verification.ok ? 'ok' : 'error'}`} data-testid="escrow-verification" data-ok={c.verification.ok ? 'true' : 'false'}>
+          {c.verification.ok ? '注文とチェーン上の資金を確かめました。' : <>確認できない点:<ul>{c.verification.problems.map((x) => <li key={x}>{x}</li>)}</ul></>}
+        </div>
+      )}
+      {c.pendingSettlement && <p className="banner warn" data-testid="escrow-pending-settlement">連署の報告（<Mono>{c.pendingSettlement.txid.slice(0, 16)}</Mono>）をチェーンで確認中です。</p>}
+      <ErrorBoundary name="escrow-case">
 
       <Section title="注文">
         <p>{c.request?.shop_url}（{c.request?.shop_region}）{c.request?.items.map((i) => `${i.sku}×${i.qty}`).join(', ')}</p>
@@ -76,7 +89,34 @@ export function EscrowCasePage() {
         <h3>配送状況</h3>
         <ul>{c.tracking.map((t, i) => <li key={i}>{formatTime(t.updated_at)} {t.status} {t.carrier} {t.tracking_no}</li>)}</ul>
         <h3>購入の証拠</h3>
-        <ul>{c.purchaseEvidence.map((e) => <li key={e.sha256}>{e.kind} {e.mime} <Mono>{e.sha256.slice(0, 16)}</Mono>{e.data_b64 && e.mime.startsWith('image/') && <img alt="" style={{ maxWidth: 240, display: 'block' }} src={`data:${e.mime};base64,${e.data_b64}`} />}</li>)}</ul>
+        <ul>
+          {c.purchaseEvidence.map((e) => {
+            const integrity = evidenceIntegrity(e);
+            const full = c.attachments?.[e.sha256]?.dataB64;
+            const data = integrity === 'ok' ? e.data_b64 : full;
+            return (
+              <li key={e.sha256} data-testid="escrow-evidence-item" data-integrity={full ? 'ok' : integrity}>
+                {e.kind} {e.mime} <Mono>{e.sha256.slice(0, 16)}</Mono>
+                {integrity === 'mismatch' && <span className="badge" data-testid="escrow-evidence-mismatch">ハッシュ不一致（表示しません）</span>}
+                {integrity === 'no-data' && !full && <span className="muted">（本体は添付で届きます）</span>}
+                {data && IMAGE.test(e.mime) && <img alt="" data-testid="escrow-evidence-image" style={{ maxWidth: 240, display: 'block' }} src={`data:${e.mime};base64,${data}`} />}
+              </li>
+            );
+          })}
+        </ul>
+        {Object.entries(c.attachments ?? {}).filter(([, a]) => a.dataB64).length > 0 && (
+          <>
+            <h3>添付（結合してハッシュを確認済み）</h3>
+            <ul>
+              {Object.entries(c.attachments ?? {}).filter(([, a]) => a.dataB64).map(([sha, a]) => (
+                <li key={sha} data-testid="escrow-attachment" data-sha256={sha}>
+                  {a.mime} <Mono>{sha.slice(0, 16)}</Mono>
+                  {IMAGE.test(a.mime) && <img alt="" style={{ maxWidth: 480, display: 'block' }} src={`data:${a.mime};base64,${a.dataB64}`} />}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
         <h3>届け先</h3>
         {address ? (
           <p data-testid="escrow-address">{address.name} 〒{address.postal_code} {address.address} {address.phone}</p>
@@ -94,7 +134,7 @@ export function EscrowCasePage() {
           </div>
           <p data-testid="ruling-fee">escrow 手数料: {fee === undefined ? '-' : formatAsset(fee < 0n ? 0n : fee, asset)}{fee !== undefined && fee < 0n && '（合計が多すぎます）'}</p>
           <Field label="理由"><textarea data-testid="ruling-reason" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
-          <ActionButton testid="ruling-submit" disabled={fee === undefined || fee < 0n} onClick={() => rt.escrow.rule(c.orderId, { user, shopper }, reason)}>
+          <ActionButton testid="ruling-submit" disabled={fee === undefined || fee < 0n || !!c.ruling || !!c.rejected} onClick={() => rt.escrow.rule(c.orderId, { user, shopper }, reason)}>
             署名して裁定を送る
           </ActionButton>
           {c.ruling && <p className="banner ok" data-testid="ruling-sent">送信済み: user {c.ruling.split.user} / shopper {c.ruling.split.shopper} / 手数料 {c.ruling.split.escrow_fee}</p>}
@@ -102,6 +142,7 @@ export function EscrowCasePage() {
       )}
       {c.settledTxid && <p className="banner ok" data-testid="escrow-settled">精算されました: <Mono>{c.settledTxid}</Mono></p>}
 
+      </ErrorBoundary>
       <Section title="経過">
         <ul className="timeline">{[...c.timeline].reverse().map((t, i) => <li key={i}><time>{formatTime(t.at)}</time>{t.text}</li>)}</ul>
       </Section>

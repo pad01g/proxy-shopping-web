@@ -18,12 +18,14 @@ interface IDBStoreLike {
   getAllKeys(range: unknown): IDBRequestLike<string[]>;
 }
 interface IDBDatabaseLike {
+  close(): void;
   objectStoreNames: { contains(name: string): boolean };
   createObjectStore(name: string): unknown;
   transaction(store: string, mode: 'readonly' | 'readwrite'): { objectStore(name: string): IDBStoreLike };
 }
 interface IDBFactoryLike {
   open(name: string, version?: number): IDBOpenRequestLike;
+  deleteDatabase(name: string): IDBRequestLike<unknown> & { onblocked: (() => void) | null };
 }
 interface KeyRangeLike {
   bound(lower: string, upper: string): unknown;
@@ -53,6 +55,22 @@ export class IndexedDBStorage implements Storage {
       if (!open.result.objectStoreNames.contains(STORE)) open.result.createObjectStore(STORE);
     };
     return new IndexedDBStorage(await req(open), g.IDBKeyRange);
+  }
+
+  /** Delete a whole database (e.g. an identity's orders on logout). Close open handles first. */
+  static async deleteDatabase(name: string): Promise<void> {
+    const g = globalThis as unknown as { indexedDB?: IDBFactoryLike };
+    if (!g.indexedDB) throw new Error('IndexedDB is not available');
+    const r = g.indexedDB.deleteDatabase(name);
+    await new Promise<void>((resolve, reject) => {
+      r.onsuccess = () => resolve();
+      r.onerror = () => reject(r.error);
+      r.onblocked = () => reject(new Error(`database ${name} is still open in another tab`));
+    });
+  }
+
+  close(): void {
+    this.db.close();
   }
 
   private store(mode: 'readonly' | 'readwrite') {

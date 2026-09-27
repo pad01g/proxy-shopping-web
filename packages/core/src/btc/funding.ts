@@ -34,7 +34,12 @@ export function buildFundingTx(p: {
   outputs: TxOutputSpec[];
   feeRate: number;
   changeAddress?: string;
+  /** Refuse fee rates above this many sat/vB (default 1000). */
+  maxFeeRate?: number;
 }): FundingTx {
+  if (!(Number.isFinite(p.feeRate) && p.feeRate > 0 && p.feeRate <= (p.maxFeeRate ?? 1000))) {
+    throw new Error(`fee rate ${p.feeRate} sat/vB is outside 0..${p.maxFeeRate ?? 1000}`);
+  }
   const target = p.outputs.reduce((s, o) => s + o.amount, 0n);
   const outVb = p.outputs.reduce((s, o) => s + vbOutput(o.address), 0) + 31; // + change
   const sorted = [...p.utxos].sort((a, b) => b.value - a.value);

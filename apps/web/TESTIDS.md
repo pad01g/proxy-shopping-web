@@ -12,6 +12,7 @@ renders its error as `<testid>-error` next to it.
 await page.goto('/');                                        // redirects to /onboarding
 await page.getByTestId('onboarding-import-toggle').click();
 await page.getByTestId('onboarding-mnemonic-input').fill(mnemonic);
+await page.getByTestId('onboarding-no-passphrase').check();   // or fill onboarding-passphrase + onboarding-passphrase-confirm (≥ 8 chars)
 await page.getByTestId('onboarding-import-submit').click();   // settings come from /config.json
 await page.getByTestId('nav-new-order').click();
 await page.getByTestId('order-shop-url').fill('https://safe-shop.test/');
@@ -25,23 +26,48 @@ await page.getByTestId('offer-select-0').check();            // first candidate 
 await page.getByTestId('address-name').fill('…');            // + address-postal-code, address-address, address-phone
 await page.getByTestId('order-submit').click();              // navigates to /user/orders/<id>
 await expect(page.getByTestId('order-status')).toHaveAttribute('data-status', 'quoted');
+// only when quote-ack-required is shown (rate > 10 % off, or not checkable): check quote-ack-deviation first
 await page.getByTestId('quote-accept').click();
 await expect(page.getByTestId('order-status')).toHaveAttribute('data-status', 'accepted');
 await page.getByTestId('order-faucet').click();              // or nav-wallet → wallet-faucet-btc
 await page.getByTestId('order-fund').click();
+await page.getByTestId('confirm-ok').click();                // confirm-dialog data-action="order-fund"
 await expect(page.getByTestId('order-status')).toHaveAttribute('data-status', 'delivered');
 await page.getByTestId('order-release').click();
+await page.getByTestId('confirm-ok').click();                // confirm-dialog data-action="order-release"
+// 'completed' is set only after the chain shows the escrow output spent (re-checked every 5 s)
 await expect(page.getByTestId('order-status')).toHaveAttribute('data-status', 'completed');
 ```
 
 A runnable version is `e2e/happy.spec.ts` (driven by `scripts/e2e-web.sh`).
+
+## Confirmation dialog (every fund-moving action)
+
+`order-fund`, `order-release`, `ruling-countersign`, `order-refund` and `refund-offer-accept` do nothing on
+click except open an in-page modal (never `window.confirm`):
+
+| testid | element |
+|---|---|
+| `confirm-dialog` | the modal; **`data-action`** = testid of the button that opened it |
+| `confirm-amount`, `confirm-recipient` | amount and receiving address |
+| `confirm-details` | (fund) per-recipient amounts, miner fee and fee rate |
+| `confirm-warning` | strong warning, e.g. `order-release` before status `delivered`, or logout |
+| `confirm-ok`, `confirm-cancel` | run / abort the action |
+
+The logout button `settings-logout` uses the same dialog (`data-action="settings-logout"`).
+
+## Error boundaries
+
+A panel that fails to render is replaced by `panel-error` (`data-panel` = panel name, or the route path).
 
 ## Global
 
 | testid | element |
 |---|---|
 | `app-loading` | shown while config / identity load |
-| `runtime-starting`, `runtime-error` | connecting / failed to start (settings form is shown below) |
+| `runtime-starting`, `runtime-error` | connecting / failed to start (settings form is shown below, including the key section) |
+| `unlock`, `unlock-passphrase`, `unlock-submit`, `unlock-error`, `unlock-forget` | the stored mnemonic is encrypted: enter the passphrase |
+| `other-tab`, `other-tab-take-over` | the app is active in another tab of this browser; take over here |
 | `whoami` | header; `data-pubkey` = our Nostr pubkey (hex) |
 | `nav-home`, `nav-new-order`, `nav-orders`, `nav-wallet`, `nav-escrow`, `nav-operator`, `nav-coordinator`, `nav-shopper`, `nav-settings` | navigation links |
 
@@ -52,11 +78,13 @@ A runnable version is `e2e/happy.spec.ts` (driven by `scripts/e2e-web.sh`).
 | `onboarding` | page |
 | `onboarding-generate` | create a new 12-word mnemonic |
 | `onboarding-backup`, `onboarding-backup-words` | backup screen / the `<ol>` of words |
-| `onboarding-backup-confirm` | "I wrote them down" → finishes onboarding |
+| `onboarding-backup-confirm` | "I wrote them down" → finishes onboarding (needs a passphrase or the opt-out) |
 | `onboarding-import-toggle` | switch to import |
 | `onboarding-mnemonic-input` | textarea for 12/24 words |
 | `onboarding-import-submit` | import |
-| `onboarding-nip07` | checkbox: identity via NIP-07 (disabled without `window.nostr`) |
+| `onboarding-nip07` | checkbox: identity via NIP-07 (disabled without `window.nostr`; if the extension is missing later the app refuses to start instead of falling back) |
+| `onboarding-passphrase`, `onboarding-passphrase-confirm` | passphrase (≥ 8) that encrypts the mnemonic (PBKDF2-SHA256 600k + AES-GCM) |
+| `onboarding-no-passphrase` | explicit opt-out: store the mnemonic in plaintext |
 | `onboarding-error` | invalid mnemonic |
 
 ## Settings `/settings`
@@ -69,9 +97,15 @@ A runnable version is `e2e/happy.spec.ts` (driven by `scripts/e2e-web.sh`).
 | `settings-rates` | rate sources table; rows `settings-rates-item`, remove `settings-rates-remove-<i>` |
 | `settings-rates-type`, `settings-rates-base`, `settings-rates-add` | add a rate source (`static` takes JSON in base) |
 | `settings-save` | persist overrides (localStorage) and reconnect; then `settings-saved` |
-| `settings-reset` | drop overrides, back to `/config.json` |
-| `settings-error` | validation error |
-| `settings-logout` | delete the key from this browser (confirm dialog) |
+| `settings-max-fee-rate` | cap for the BTC funding fee rate (sat/vB, default 50) |
+| `settings-reset` | drop all overrides, back to `/config.json` |
+| `settings-overrides`, rows `settings-override-item` (`data-field`), `settings-override-reset-<field>` | fields that override config.json, with a per-field reset |
+| `settings-endpoint-warning` | an endpoint (relays, esplora, evm_rpc, deployments_url, rates, faucet, chain id) differs from config.json |
+| `settings-error` | validation error (coordinator keys; endpoints must be https/wss unless `allow_private_endpoints` in config.json) |
+| `settings-key` | key section (shown even when the runtime failed) |
+| `settings-mnemonic-passphrase`, `settings-show-mnemonic`, `settings-mnemonic-words`, `settings-key-error` | re-show the mnemonic (asks the passphrase again) |
+| `settings-export-orders` | download orders and escrow cases as JSON |
+| `settings-logout-delete-data`, `settings-logout` | delete the key (confirm dialog); optionally also this identity's database |
 
 Lists (`StringList`) with base id `X`: container `X`, rows `X-item`, remove `X-remove-<i>`,
 new value `X-input`, add `X-add`.
@@ -108,21 +142,26 @@ new value `X-input`, add `X-add`.
 | `order-id` | full order id text |
 | `order-status` | **`data-status`**: `requested` `quoted` `rejected` `accepted` `funding` `funded` `purchased` `shipped` `delivered` `delivery_failed` `released` `completed` `disputed` `ruled` `settled` `refunded` `cancelled` |
 | `order-last-error` | last action error recorded on the order |
+| `order-pending-settlement` (`data-kind` = `completed` / `settled`) | a peer claimed completion / countersignature; waiting for the chain |
 | `quote-waiting`, `quote-rejected` | before quote / shopper declined |
 | `quote` | quote section; `quote-rate`, `quote-lock-amount`, `quote-escrow-address` |
+| `quote-timelock-t1`, `quote-timelock-t2` | T1 / T2 with date and countdown; `data-value` = height / UNIX time, `data-at` = estimated UNIX time |
 | `quote-fx-banner` | **`data-level`**: `ok`, `warn` (>3 %), `strong` (>10 %) |
-| `quote-check-ok`, `quote-check-errors`, `quote-check-warnings` | validation result (errors block accepting) |
+| `quote-check-ok`, `quote-check-errors`, `quote-check-warnings` | validation result (errors block accepting: address, lock_amount, payout_fee_reserve cap, upfront fee > 2×, timelock policy, deployments cross-check) |
+| `quote-ack-required`, `quote-ack-deviation` | rate > 10 % off or not checkable: the checkbox must be checked before `quote-accept` is enabled |
 | `quote-accept`, `quote-recheck`, `order-cancel` | actions (status `quoted`) |
 | `fund` | funding section (status `accepted`/`funding`); `fund-balance` (`data-enough` = the wallet covers lock + upfront fee; `order-fund` is disabled until then) |
+| `fund-preview` | BTC: `data-fee` (sats), `data-fee-rate` (sat/vB, capped) |
 | `order-faucet` | lab faucet for the order's asset (only with `faucet_url`) |
-| `order-fund` | fund escrow + upfront fee, then order.funded + escrow.notice |
+| `order-fund` | fund escrow + upfront fee, then order.funded + escrow.notice (confirm dialog) |
 | `progress`, `order-funded-tx`, `order-purchased`, `order-tracking` | after funding |
-| `order-release` | sign payout to the shopper |
-| `order-completed`, `order-completed-txid` | shopper's order.completed |
+| `order-release` | sign payout to the shopper (confirm dialog; `confirm-warning` unless status is `delivered`) |
+| `order-completed`, `order-completed-txid` | completion verified on chain (BTC outspend / Safe empty + receipt) |
+| `refund-offer`, `refund-offer-problems`, `refund-offer-accept` | shopper's cooperative refund: never auto-signed; accept (confirm dialog) only if it matches the template |
 | `dispute`, `dispute-claim`, `dispute-text`, `dispute-split-user`, `dispute-split-shopper`, `dispute-open` | open a dispute |
 | `dispute-opened`, `dispute-send-evidence` | after opening |
-| `ruling`, `ruling-problems`, `ruling-countersign`, `ruling-settled` | escrow ruling: review, countersign + broadcast |
-| `refund`, `refund-status` (`data-reached`), `order-refund` | user-only refund after T2 |
+| `ruling`, `ruling-problems`, `ruling-countersign`, `ruling-settled` | escrow ruling: review, countersign + broadcast (confirm dialog) |
+| `refund`, `refund-status` (`data-reached`), `refund-t2`, `order-refund` | user-only refund after T2 (confirm dialog); shown while the escrow output is unspent on chain, whatever the status |
 | `report`, `report-subject`, `report-text`, `report-send`, `report-sent` | report to the operator |
 | `order-timeline`, `order-timeline-item` (`data-kind` = message type) | history |
 
@@ -141,16 +180,19 @@ new value `X-input`, add `X-add`.
 | `escrow-profile`, `escrow-profile-name`, `escrow-profile-bps`, `escrow-profile-min-sats`, `escrow-profile-min-usdc`, `escrow-profile-dispute-bps`, `escrow-profile-publish`, `escrow-profile-published` | kind 30503 publisher |
 | `escrow-case` | detail page, `data-order-id` |
 | `escrow-case-detail-status` | `data-status` |
+| `escrow-case-rejected`, `escrow-conflicts`, `escrow-verification` (`data-ok`), `escrow-pending-settlement` | §4.7 assembly: refused case, evidence contradicting the notice, on-chain checks, unconfirmed countersignature |
 | `escrow-check-obligation`, `escrow-obligation` (`data-paid`) | on-chain upfront fee check |
 | `escrow-dispute`, `escrow-missing`, `escrow-request-evidence` | claims / missing evidence |
 | `escrow-evidence`, `escrow-evidence-message` | evidence viewer |
+| `escrow-evidence-item` (`data-integrity` = `ok` / `mismatch` / `no-data`), `escrow-evidence-mismatch`, `escrow-evidence-image` | purchase evidence; inline data must match its sha256 |
+| `escrow-attachment` (`data-sha256`) | assembled and hash-checked attachments (images shown) |
 | `escrow-decrypt-address`, `escrow-address` | decrypted delivery address |
 | `escrow-ruling`, `ruling-user`, `ruling-shopper`, `ruling-fee`, `ruling-reason`, `ruling-submit`, `ruling-sent` | ruling form (fee = remainder) |
 | `escrow-settled` | a party countersigned |
 
 ## Operator `/operator`
 
-`operator`, `operator-version` (`data-version`), `operator-name`, `operator-report-to`,
+`operator`, `operator-version` (`data-version`; versions are `max(known + 1, now)`, so compare, do not expect 1/2), `operator-name`, `operator-report-to`,
 lists `operator-regions` / `operator-relays`, `operator-chain` (JSON, applied on blur),
 `operator-entries`, rows `operator-entry`, `operator-entry-remove-<i>`,
 new entry `operator-entry-region`, `operator-entry-sla`, `operator-entry-shopper`, `operator-entry-escrow`,
@@ -162,7 +204,7 @@ new entry `operator-entry-region`, `operator-entry-sla`, `operator-entry-shopper
 ## Coordinator `/coordinator`
 
 `coordinator`, rows `coordinator-delegation` (`data-operator`, `data-revoked`),
-`coordinator-delegation-version` (`v<N>`), `coordinator-revoke-<first 8 hex of operator>`,
+`coordinator-delegation-version` (`v<N>`, N = max(known + 1, now)), `coordinator-revoke-<first 8 hex of operator>`,
 `coordinator-restore-<first 8 hex>`, `coordinator-operator`, `coordinator-note`, `coordinator-delegate`.
 
 ## Shopper `/shopper`

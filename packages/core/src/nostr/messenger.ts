@@ -2,10 +2,12 @@ import type { NostrEvent } from 'nostr-tools/pure';
 import type { IdentitySigner } from '../keys/signer.js';
 import type { Storage } from '../storage/types.js';
 import { Emitter } from '../util/emitter.js';
+import { isAllowedEndpoint } from '../util/endpoint.js';
 import { KeyedMutex, nowSeconds } from '../util/time.js';
-import { giftWrap, innerBody, innerMeta, signInner, unwrap, type Inner } from './giftwrap.js';
+import { giftWrap, innerMeta, signInner, unwrap, type Inner } from './giftwrap.js';
 import { KIND, tagValues } from './kinds.js';
 import { MAX_INNER_BYTES, MSG } from './messages.js';
+import { parseBody } from './schema.js';
 import { unique, type NostrTransport, type Subscription } from './transport.js';
 import { latestByAddress } from '../trust/versions.js';
 import { verified } from '../trust/events.js';
@@ -43,15 +45,43 @@ export interface MessengerOptions {
   k?: number;
   retryIntervalMs?: number;
   maxRetryAgeMs?: number;
+  /** Lab only: accept ws:// and private / loopback relays in peers' kind 10050 (§4.10). */
+  allowPrivateRelays?: boolean;
+  /** Messages accepted per sender per minute before further ones are dropped. */
+  maxPerSenderPerMinute?: number;
 }
+
+/** Stored gift wraps fetched when the inbox subscription starts (the rest arrive live). */
+const BACKLOG_LIMIT = 1000;
 
 type Events = {
   message: IncomingMessage;
   acked: { id: string };
+  /** A message that unwrapped fine but whose body does not fit its schema (§4.10), or was rate limited. */
+  dropped: { inner: Inner; reason: string };
   error: Error;
 };
 
 const SEVEN_DAYS_MS = 7 * 24 * 3600 * 1000;
+/** §4.10: only the first 8 inbox relays of a peer are used. */
+export const MAX_PEER_RELAYS = 8;
+const MAP_LIMIT = 5000;
+
+function parseInner(type: string, inner: Inner): unknown {
+  try {
+    return parseBody(type, JSON.parse(inner.content));
+  } catch {
+    return undefined;
+  }
+}
+
+/** Drop the oldest entries of an insertion-ordered map once it grows past `limit`. */
+function trim<K, V>(m: Map<K, V>, limit = MAP_LIMIT): void {
+  for (const k of m.keys()) {
+    if (m.size <= limit) break;
+    m.delete(k);
+  }
+}
 
 /**
  * Gift-wrapped 1:1 messaging with ack/retry/dedupe (spec §4.1, §4.2).
@@ -71,6 +101,11 @@ export class Messenger extends Emitter<Events> {
   private me?: string;
   private readonly lock = new KeyedMutex();
   private readonly lastAck = new Map<string, number>();
+  private readonly allowPrivateRelays: boolean;
+  private readonly perMinute: number;
+  private readonly buckets = new Map<string, { tokens: number; at: number }>();
+  /** Inner ids whose body failed its schema (so relay copies are not re-reported). */
+  private readonly dropped = new Set<string>();
 
   constructor(opts: MessengerOptions) {
     super();
@@ -81,6 +116,8 @@ export class Messenger extends Emitter<Events> {
     this.k = opts.k ?? 2;
     this.retryIntervalMs = opts.retryIntervalMs ?? 30_000;
     this.maxRetryAgeMs = opts.maxRetryAgeMs ?? SEVEN_DAYS_MS;
+    this.allowPrivateRelays = opts.allowPrivateRelays ?? false;
+    this.perMinute = opts.maxPerSenderPerMinute ?? 120;
   }
 
   get running(): boolean {
@@ -103,9 +140,20 @@ export class Messenger extends Emitter<Events> {
   async start(): Promise<void> {
     if (this.running) return;
     const me = await this.pubkey();
-    this.sub = this.transport.subscribe(this.relays, { kinds: [KIND.giftWrap], '#p': [me] }, (e) => {
-      void this.handleWrap(e).catch((err) => this.emit('error', err as Error));
-    });
+    // Stored events come first: they are bounded by the filter's limit, and a fresh device (or a
+    // memory store) sees all of them as new, so the per-sender rate limit applies only after EOSE.
+    let live = false;
+    const goLive = () => {
+      live = true;
+      clearTimeout(eoseTimer);
+    };
+    const eoseTimer = setTimeout(goLive, 10_000);
+    this.sub = this.transport.subscribe(
+      this.relays,
+      { kinds: [KIND.giftWrap], '#p': [me], limit: BACKLOG_LIMIT },
+      (e) => void this.handleWrap(e, live).catch((err) => this.emit('error', err as Error)),
+      goLive,
+    );
     this.timer = setInterval(() => void this.retryDue(), Math.min(this.retryIntervalMs, 5_000));
   }
 
@@ -128,24 +176,40 @@ export class Messenger extends Emitter<Events> {
     return ev;
   }
 
-  /** Relays where `pubkey` reads its messages (kind 10050, else our relays). */
+  /**
+   * Relays where `pubkey` reads its messages (kind 10050, else our relays). The list is chosen by
+   * the peer, so only its first 8 wss:// relays on public hosts are used (§4.10).
+   */
   async inboxRelaysOf(pubkey: string): Promise<string[]> {
     const cached = this.inboxCache.get(pubkey);
     if (cached && Date.now() - cached.at < 5 * 60_000) return cached.relays;
     const events = await this.transport.query(this.relays, { kinds: [KIND.inboxRelays], authors: [pubkey] }, { maxWaitMs: 2500 });
     const latest = latestByAddress(events.filter((e) => e.pubkey === pubkey && verified(e)), { requireVersion: false })[0];
-    const listed = latest ? unique(tagValues(latest.tags, 'relay')) : [];
+    const listed = latest ? this.usableRelays(tagValues(latest.tags, 'relay')) : [];
     const relays = listed.length ? listed : this.relays;
     this.inboxCache.set(pubkey, { relays, at: Date.now() });
+    trim(this.inboxCache, 1000);
     return relays;
+  }
+
+  /** A peer-supplied relay list reduced to what we are willing to connect to. */
+  usableRelays(urls: string[]): string[] {
+    const policy = { allowPrivate: this.allowPrivateRelays };
+    return unique(urls).filter((u) => isAllowedEndpoint(u, 'ws', policy)).slice(0, MAX_PEER_RELAYS);
   }
 
   /** Sign an inner and send it; retried until acked (acks themselves are fire-and-forget). */
   async send(recipient: string, orderId: string, type: string, body: unknown): Promise<Inner> {
+    const inner = await this.sign(recipient, orderId, type, body);
+    await this.sendInner(inner);
+    return inner;
+  }
+
+  /** Sign an inner without sending it, so the caller can store it first (replies may beat the publish). */
+  async sign(recipient: string, orderId: string, type: string, body: unknown): Promise<Inner> {
     const inner = await signInner(this.signer, { recipient, orderId, type, body });
     const size = new TextEncoder().encode(JSON.stringify(inner)).length;
     if (size > MAX_INNER_BYTES) throw new Error(`${type} message is ${size} bytes, over the ${MAX_INNER_BYTES} byte limit (§4.9)`);
-    await this.sendInner(inner);
     return inner;
   }
 
@@ -153,7 +217,9 @@ export class Messenger extends Emitter<Events> {
   async sendInner(inner: Inner): Promise<void> {
     const { recipient, type } = innerMeta(inner);
     const wrap = await giftWrap(this.signer, inner, recipient);
-    const relays = await this.inboxRelaysOf(recipient);
+    const inbox = await this.inboxRelaysOf(recipient);
+    // Acks go to at most k of the peer's relays (§4.10): they are not retried and anyone can trigger one.
+    const relays = type === MSG.ack ? inbox.slice(0, this.k) : inbox;
     const now = Date.now();
     if (type !== MSG.ack) {
       await this.store.put<OutboxEntry>(`outbox/${inner.id}`, {
@@ -198,7 +264,7 @@ export class Messenger extends Emitter<Events> {
     }
   }
 
-  private async handleWrap(wrap: NostrEvent): Promise<void> {
+  private async handleWrap(wrap: NostrEvent, live = true): Promise<void> {
     let inner: Inner;
     try {
       inner = await unwrap(this.signer, wrap);
@@ -207,31 +273,50 @@ export class Messenger extends Emitter<Events> {
     }
     const meta = innerMeta(inner);
     if (meta.type === MSG.ack) {
-      await this.handleAck(inner);
+      const body = !live || this.takeToken(inner.pubkey) ? parseInner(meta.type, inner) : undefined;
+      if (body) await this.handleAck(inner, body as { ids: string[] });
       return;
     }
     const key = `inbox/${inner.id}`;
-    // The same wrap usually arrives from several relays at once.
-    const seen = await this.lock.run(inner.id, async () => {
-      const prev = await this.store.get<InboxEntry>(key);
-      if (!prev) await this.store.put<InboxEntry>(key, { inner, receivedAt: nowSeconds() });
-      return prev !== undefined;
-    });
-    // Always ack, even duplicates: a resend means our previous ack was lost.
-    await this.sendAck(inner);
-    if (seen) return;
     let body: unknown;
-    try {
-      body = innerBody(inner);
-    } catch {
-      body = undefined;
-    }
-    this.emit('message', { inner, from: inner.pubkey, orderId: meta.orderId, type: meta.type, body });
+    // The same wrap usually arrives from several relays at once: decide once per inner id.
+    const verdict = await this.lock.run(inner.id, async () => {
+      if (this.dropped.has(inner.id) || (await this.store.get<InboxEntry>(key))) return 'duplicate';
+      if (live && !this.takeToken(inner.pubkey)) return 'limited';
+      body = parseInner(meta.type, inner);
+      if (body === undefined) {
+        this.dropped.add(inner.id);
+        if (this.dropped.size > MAP_LIMIT) this.dropped.delete(this.dropped.values().next().value!);
+        return 'invalid';
+      }
+      await this.store.put<InboxEntry>(key, { inner, receivedAt: nowSeconds() });
+      return 'new';
+    });
+    // No ack when rate limited: the sender retries later, which is the back-pressure we want.
+    if (verdict === 'limited') return this.emit('dropped', { inner, reason: 'rate limited' });
+    // Ack everything else, even duplicates (a resend means our previous ack was lost) and invalid
+    // bodies (so the sender stops retrying) — but never hand an unchecked body to the roles.
+    await this.sendAck(inner);
+    if (verdict === 'invalid') this.emit('dropped', { inner, reason: `body of ${meta.type || 'untyped message'} does not match its schema` });
+    if (verdict === 'new') this.emit('message', { inner, from: inner.pubkey, orderId: meta.orderId, type: meta.type, body });
   }
 
-  private async handleAck(inner: Inner): Promise<void> {
-    const { ids } = innerBody<{ ids?: string[] }>(inner);
-    for (const id of ids ?? []) {
+  /** Per-sender token bucket: `perMinute` messages, refilled continuously. */
+  private takeToken(sender: string): boolean {
+    const now = Date.now();
+    const b = this.buckets.get(sender) ?? { tokens: this.perMinute, at: now };
+    b.tokens = Math.min(this.perMinute, b.tokens + ((now - b.at) / 60_000) * this.perMinute);
+    b.at = now;
+    const ok = b.tokens >= 1;
+    if (ok) b.tokens -= 1;
+    this.buckets.delete(sender);
+    this.buckets.set(sender, b);
+    trim(this.buckets);
+    return ok;
+  }
+
+  private async handleAck(inner: Inner, { ids }: { ids: string[] }): Promise<void> {
+    for (const id of ids) {
       const key = `outbox/${id}`;
       const e = await this.store.get<OutboxEntry>(key);
       // Only the original recipient may ack a message.
@@ -246,6 +331,7 @@ export class Messenger extends Emitter<Events> {
     const last = this.lastAck.get(inner.id) ?? 0;
     if (Date.now() - last < 5_000) return;
     this.lastAck.set(inner.id, Date.now());
+    trim(this.lastAck);
     const ack = await signInner(this.signer, {
       recipient: inner.pubkey,
       orderId: innerMeta(inner).orderId,

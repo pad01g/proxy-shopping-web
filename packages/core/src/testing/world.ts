@@ -10,6 +10,7 @@ import { StaticSource } from '../fx/sources.js';
 import { KeySet } from '../keys/derive.js';
 import type { NostrTransport } from '../nostr/transport.js';
 import { MemoryStorage } from '../storage/memory.js';
+import type { TimelockPolicy } from '../flows/timelock-policy.js';
 import { FakeShopper, type FakeShopperOptions } from './fake-shopper.js';
 
 /** Lab mnemonics from docs/lab.md (test-only keys). */
@@ -34,7 +35,21 @@ export interface WorldOptions {
   evm?: (keys: KeySet) => EvmClient;
   shopper?: Partial<FakeShopperOptions>;
   retryIntervalMs?: number;
+  /** The user's timelock policy; defaults to the lab's short one (LAB_TIMELOCK_POLICY). */
+  timelockPolicy?: TimelockPolicy;
+  /** How often user / escrow re-check settlement claims on chain (ms). */
+  chainPollMs?: number;
 }
+
+/** `timelock_policy` of the lab web config (proxy-shopping-go/lab/web-config.json). */
+export const LAB_TIMELOCK_POLICY: TimelockPolicy = {
+  btc_min_t1_blocks: 50,
+  evm_min_t1_seconds: 1800,
+  btc_min_gap_blocks: 20,
+  evm_min_gap_seconds: 1800,
+  btc_max_t2_blocks: 1000,
+  evm_max_t2_seconds: 86400,
+};
 
 /**
  * A complete trust setup (coordinator → operator → list with shopper × escrow)
@@ -49,7 +64,10 @@ export async function createWorld(o: WorldOptions) {
       keys: keys[name],
       transport: o.transport(name),
       storage: new MemoryStorage(),
-      config: { network, relays: o.relays, coordinators: [coordinatorPk], retryIntervalMs: o.retryIntervalMs ?? 1000 },
+      config: {
+        network, relays: o.relays, coordinators: [coordinatorPk], retryIntervalMs: o.retryIntervalMs ?? 1000,
+        timelockPolicy: o.timelockPolicy ?? LAB_TIMELOCK_POLICY, allowPrivateEndpoints: true,
+      },
       chain: o.chain,
       evm: o.evm?.(keys[name]),
       rates: [new StaticSource({ 'BTC/USD': 100000, 'USD/JPY': 150, 'USDC/USD': 1 })],
@@ -77,7 +95,7 @@ export async function createWorld(o: WorldOptions) {
     name: 'shopper-1', payments: ['btc-signet', 'usdc-evm'], currencies: ['JPY'], cash_regions: ['JP-27'],
     fee: { bps: 500, min: { amount: '300', currency: 'JPY' } }, delivery_days: 5,
   }));
-  const escrow = new EscrowClient(sessions['escrow-1']).attach();
+  const escrow = new EscrowClient(sessions['escrow-1'], { chainPollMs: o.chainPollMs ?? 500 }).attach();
   await escrow.publishProfile({ name: 'escrow-1', upfront_fee: { bps: 50, min_sats: '1000', min_usdc: '0.50' }, dispute_fee_bps: 200 });
 
   const shopper = new FakeShopper(sessions['shopper-1'], {
@@ -87,13 +105,17 @@ export async function createWorld(o: WorldOptions) {
     escrowUpfrontFee: { 'btc-signet': 1000n, 'usdc-evm': 500_000n },
     ...o.shopper,
   });
-  const user = new UserClient(sessions['user-1']).attach();
+  const user = new UserClient(sessions['user-1'], { chainPollMs: o.chainPollMs ?? 500 }).attach();
 
   for (const s of Object.values(sessions)) await s.start();
   await sessions['shopper-1'].directory.refresh();
 
   return {
     keys, sessions, user, escrow, operator, shopper,
-    stop: () => Object.values(sessions).forEach((s) => { s.stop(); s.transport.close(); }),
+    stop: () => {
+      user.detach();
+      escrow.detach();
+      Object.values(sessions).forEach((s) => { s.stop(); s.transport.close(); });
+    },
   };
 }

@@ -1,7 +1,9 @@
-import { hashTypedData, keccak256, recoverAddress, zeroAddress } from 'viem';
+import { concat, encodeFunctionData, hashTypedData, keccak256, pad, recoverAddress, zeroAddress } from 'viem';
+import { multiSendCallOnlyAbi } from './abi.js';
 import { privateKeyToAccount } from 'viem/accounts';
 import { describe, expect, it } from 'vitest';
-import type { Deployments } from './deployments.js';
+import { EvmClient } from './chain.js';
+import { crossCheckDeployments, deploymentsSchema, type Deployments } from './deployments.js';
 import { orderSafeAddress, safeInitializer, safeSaltNonce } from './safe.js';
 import {
   decodeMultiSend, packSignatures, recoverSafeTxSigner, releaseSafeTx, safeTxFromJson, safeTxHash, safeTxToJson,
@@ -83,8 +85,41 @@ describe('SafeTx (§6.4)', () => {
     expect(tx.operation).toBe(1);
     expect(tx.to).toBe(D.safe.multisend_call_only);
     expect(decodeMultiSend(tx.data)).toHaveLength(2);
-    expect(safeTxTransfers(tx, D.usdc)).toEqual([{ to: U.address, amount: 10n }, { to: E.address, amount: 2n }]);
+    expect(safeTxTransfers(tx, D.usdc, D.safe.multisend_call_only)).toEqual([{ to: U.address, amount: 10n }, { to: E.address, amount: 2n }]);
     expect(safeTxFromJson(safeTxToJson(tx))).toEqual(tx);
     expect(safeTxToJson(tx)).toMatchObject({ value: '0', operation: '1', nonce: '0', gasToken: zeroAddress });
+  });
+
+  it('only accepts transfers through USDC directly or through MultiSendCallOnly', () => {
+    const ms = D.safe.multisend_call_only;
+    const split = splitSafeTx({ usdc: D.usdc, multiSend: ms, payouts: [{ to: U.address, amount: 10n }] });
+    // The same MultiSend payload delegatecalled into any other contract could do anything.
+    expect(() => safeTxTransfers({ ...split, to: S.address }, D.usdc, ms)).toThrow(/MultiSendCallOnly/);
+    const release = releaseSafeTx({ usdc: D.usdc, to: U.address, amount: 1n });
+    expect(() => safeTxTransfers({ ...release, to: S.address }, D.usdc, ms)).toThrow(/USDC/);
+    // A call header that claims more data than the payload holds.
+    const bogus = encodeFunctionData({ abi: multiSendCallOnlyAbi, functionName: 'multiSend', args: [concat(['0x00', D.usdc, pad('0x0'), pad('0x64'), '0x1234'])] });
+    expect(() => decodeMultiSend(bogus)).toThrow(/truncated/);
+  });
+});
+
+
+describe('EVM infrastructure trust (items 7, 15)', () => {
+  it('disables CCIP-Read on the clients', () => {
+    const c = new EvmClient(31337, 'http://127.0.0.1:1', U as never, D);
+    expect(c.public.ccipRead).toBe(false);
+  });
+
+  it('cross-checks deployments with the signed operator list', () => {
+    const list = { chain_id: 31337, rpc: [], usdc: D.usdc.toLowerCase(), safe: { ...D.safe, module: D.module, setup: D.setup } };
+    expect(crossCheckDeployments(D, list)).toEqual([]);
+    expect(crossCheckDeployments({ ...D, usdc: S.address }, list).join()).toMatch(/usdc/);
+    expect(crossCheckDeployments({ ...D, chain_id: 1 }, list).join()).toMatch(/chain_id/);
+    expect(crossCheckDeployments({ ...D, safe: { ...D.safe, factory: S.address } }, list).join()).toMatch(/factory/);
+  });
+
+  it('validates a fetched deployments file', () => {
+    expect(deploymentsSchema(D)).toEqual(D);
+    expect(() => deploymentsSchema({ ...D, usdc: 'javascript:alert(1)' })).toThrow();
   });
 });

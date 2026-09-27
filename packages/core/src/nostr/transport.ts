@@ -17,7 +17,8 @@ export interface Subscription {
 export interface NostrTransport {
   publish(relays: string[], event: NostrEvent): Promise<PublishResult>;
   query(relays: string[], filter: Filter, opts?: { maxWaitMs?: number }): Promise<NostrEvent[]>;
-  subscribe(relays: string[], filter: Filter, onEvent: (e: NostrEvent) => void): Subscription;
+  /** `onEose` fires once the relays have sent their stored events (NIP-01 EOSE). */
+  subscribe(relays: string[], filter: Filter, onEvent: (e: NostrEvent) => void, onEose?: () => void): Subscription;
   close(): void;
 }
 
@@ -45,8 +46,8 @@ export class PoolTransport implements NostrTransport {
     return this.pool.querySync(unique(relays), filter, { maxWait: opts?.maxWaitMs ?? 4000 });
   }
 
-  subscribe(relays: string[], filter: Filter, onEvent: (e: NostrEvent) => void): Subscription {
-    return this.pool.subscribeMany(unique(relays), filter, { onevent: onEvent });
+  subscribe(relays: string[], filter: Filter, onEvent: (e: NostrEvent) => void, onEose?: () => void): Subscription {
+    return this.pool.subscribeMany(unique(relays), filter, { onevent: onEvent, oneose: onEose });
   }
 
   close(): void {

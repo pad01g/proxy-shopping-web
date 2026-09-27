@@ -15,6 +15,11 @@ import { escrowPubkeyFromXpub, KeySet } from './keys/derive.js';
 import { orderIndex } from './keys/order.js';
 import { LocalSigner } from './keys/signer.js';
 import { unwrap } from './nostr/giftwrap.js';
+import { schnorr } from '@noble/curves/secp256k1';
+import { sha256 } from '@noble/hashes/sha2';
+import { keyForEscrowSha256 } from './delivery/delivery.js';
+import { keyProofMessage, signKeyProofEvm, verifyKeyProofBtc, verifyKeyProofEvm } from './keys/proof.js';
+import { utf8 } from './util/bytes.js';
 import { fromHex, toHex } from './util/bytes.js';
 
 const FILE = fileURLToPath(new URL('../../../../proxy-shopping-go/docs/test-vectors.json', import.meta.url));
@@ -85,7 +90,7 @@ describe.skipIf(!present)('Go test vectors', () => {
     const relAmount = BigInt(`0x${rel.data.slice(74)}`);
     expect(releaseSafeTx({ usdc: rel.to, to: relTo, amount: relAmount })).toEqual({ ...rel, to: rel.to });
     const split = safeTxFromJson(t.split.safe_tx);
-    const payouts = safeTxTransfers(split, s.usdc);
+    const payouts = safeTxTransfers(split, s.usdc, s.multisend_call_only);
     expect(splitSafeTx({ usdc: s.usdc, multiSend: split.to, payouts }).data).toBe(split.data);
   });
 
@@ -119,4 +124,25 @@ describe.skipIf(!present)('Go test vectors', () => {
     expect(nip44.encrypt(sealPlain, conv, fromHex(g.seal_nip44_nonce))).toBe(g.seal.content);
     expect(JSON.parse(sealPlain)).toEqual(g.inner);
   });
+
+  it.skipIf(!V.delivery?.key_for_escrow_sha256)('key_for_escrow_sha256 (§4.4)', () => {
+    expect(keyForEscrowSha256(V.delivery.key_for_escrow.payload)).toBe(V.delivery.key_for_escrow_sha256);
+  });
+
+  it.skipIf(!V.key_proof)('key_proof (§4.4.1)', async () => {
+    const k = V.key_proof;
+    const user = keyOf(k.user);
+    expect(user.nostrPublicKey).toBe(k.user_nostr_pubkey);
+    expect(keyProofMessage(k.order_id, k.user_nostr_pubkey)).toBe(k.message);
+    // BTC: BIP340 over sha256(m) with the order key; with the same aux_rand we produce the same bytes
+    expect(toHex(user.orderKey(k.order_id).publicKey)).toBe(k.btc.user_btc_pubkey);
+    expect(verifyKeyProofBtc(k.btc.key_proof, k.btc.user_btc_pubkey, k.order_id, k.user_nostr_pubkey)).toBe(true);
+    const ours = schnorr.sign(sha256(utf8(k.message)), user.orderKey(k.order_id).privateKey, fromHex(k.btc.aux_rand));
+    expect(toHex(ours)).toBe(k.btc.key_proof);
+    // EVM: EIP-191 personal_sign, 65 bytes without 0x; RFC 6979 makes it deterministic
+    expect(user.evmAddress).toBe(k.evm.user_evm_address);
+    expect(await verifyKeyProofEvm(k.evm.key_proof, k.evm.user_evm_address, k.order_id, k.user_nostr_pubkey)).toBe(true);
+    expect(await signKeyProofEvm(user.evmAccount, k.order_id, k.user_nostr_pubkey)).toBe(k.evm.key_proof);
+  });
 });
+

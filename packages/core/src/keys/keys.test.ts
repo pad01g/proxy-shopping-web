@@ -7,6 +7,7 @@ import { toHex, utf8 } from '../util/bytes.js';
 import { escrowPubkeyFromXpub, KeySet } from './derive.js';
 import { generateMnemonic, isValidMnemonic, mnemonicFromEntropy } from './mnemonic.js';
 import { orderIndex } from './order.js';
+import { keyProofMessage, signKeyProofBtc, signKeyProofEvm, verifyKeyProofBtc, verifyKeyProofEvm, verifyRequestKeyProof } from './proof.js';
 
 const LAB_KEYS = fileURLToPath(new URL('../../../../../proxy-shopping-go/lab/keys/', import.meta.url));
 
@@ -61,4 +62,27 @@ describe('keys', () => {
     expect(generateMnemonic(24).split(' ')).toHaveLength(24);
     expect(isValidMnemonic('abandon abandon abandon')).toBe(false);
   });
+
+  it('key_proof (§4.4.1) binds the Nostr identity to the BTC order key and the EVM account', async () => {
+    const user = KeySet.fromMnemonic('news hybrid corn purchase public hedgehog clay survey able alter supreme shove');
+    const mallory = KeySet.fromMnemonic('leader monkey parrot ring guide accident before fence cannon height naive bean');
+    const order = '0123456789abcdef0123456789abcdef';
+    expect(keyProofMessage(order, user.nostrPublicKey)).toBe(`ps-key-proof-v1|${order}|${user.nostrPublicKey}`);
+    const btcPub = toHex(user.orderKey(order).publicKey);
+    const btc = signKeyProofBtc(user.orderKey(order).privateKey, order, user.nostrPublicKey);
+    expect(btc).toMatch(/^[0-9a-f]{128}$/);
+    expect(verifyKeyProofBtc(btc, btcPub, order, user.nostrPublicKey)).toBe(true);
+    // Mallory copying the user's key into her own request cannot produce a proof for her identity.
+    expect(verifyKeyProofBtc(btc, btcPub, order, mallory.nostrPublicKey)).toBe(false);
+    expect(verifyKeyProofBtc(btc, btcPub, 'f'.repeat(32), user.nostrPublicKey)).toBe(false);
+    // BIP340 over sha256(m): same check as the raw library call
+    expect(schnorr.verify(btc, sha256(utf8(keyProofMessage(order, user.nostrPublicKey))), user.orderKey(order).publicKey.slice(1))).toBe(true);
+    const evm = await signKeyProofEvm(user.evmAccount, order, user.nostrPublicKey);
+    expect(evm).toMatch(/^[0-9a-f]{130}$/);
+    expect(await verifyKeyProofEvm(evm, user.evmAddress, order, user.nostrPublicKey)).toBe(true);
+    expect(await verifyKeyProofEvm(`0x${evm}`, user.evmAddress, order, user.nostrPublicKey)).toBe(true);
+    expect(await verifyKeyProofEvm(evm, mallory.evmAddress, order, user.nostrPublicKey)).toBe(false);
+    expect(await verifyRequestKeyProof({ payment: 'usdc-evm', user_evm_address: user.evmAddress, key_proof: evm } as never, order, mallory.nostrPublicKey)).toBe(false);
+  });
 });
+

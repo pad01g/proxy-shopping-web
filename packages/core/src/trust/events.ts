@@ -5,6 +5,8 @@ import { nowSeconds } from '../util/time.js';
 import type {
   Delegation, EscrowProfileContent, OperatorList, OperatorListContent, ShopperProfileContent,
 } from './types.js';
+import { tryParse, type Check } from '../util/validate.js';
+import { escrowProfileContent, operatorListContent, shopperProfileContent } from './schema.js';
 import { eventVersion } from './versions.js';
 
 const isHexKey = (s: unknown): s is string => typeof s === 'string' && /^[0-9a-f]{64}$/.test(s);
@@ -44,22 +46,10 @@ export function parseOperatorList(e: NostrEvent): OperatorList | undefined {
   const version = eventVersion(e);
   const d = tagValue(e.tags, 'd');
   if (version < 0 || !d) return undefined;
-  let content: OperatorListContent;
-  try {
-    content = JSON.parse(e.content) as OperatorListContent;
-  } catch {
-    return undefined;
-  }
-  if (!Array.isArray(content.entries) || content.network !== d) return undefined;
-  const entries = content.entries.filter(
-    (x) => x && typeof x.region === 'string' && isHexKey(x.shopper) && isHexKey(x.escrow),
-  ).map((x) => ({
-    ...x,
-    shops: Array.isArray(x.shops) ? x.shops : ['*'],
-    payments: Array.isArray(x.payments) ? x.payments : [],
-    tags: Array.isArray(x.tags) ? x.tags : [],
-  }));
-  return { operator: e.pubkey, version, network: d, content: { ...content, entries }, eventId: e.id };
+  const content = parseJson(e.content, operatorListContent);
+  // §2.3: d is the network name and the content must say the same.
+  if (!content || content.network !== d) return undefined;
+  return { operator: e.pubkey, version, network: d, content, eventId: e.id };
 }
 
 export interface Profile<T> {
@@ -69,17 +59,23 @@ export interface Profile<T> {
   event: NostrEvent;
 }
 
-function parseProfile<T>(e: NostrEvent, kind: number): Profile<T> | undefined {
-  if (e.kind !== kind || !verified(e)) return undefined;
+function parseJson<T>(json: string, check: Check<T>): T | undefined {
   try {
-    return { pubkey: e.pubkey, version: eventVersion(e), content: JSON.parse(e.content) as T, event: e };
+    return tryParse(check, JSON.parse(json));
   } catch {
     return undefined;
   }
 }
 
-export const parseShopperProfile = (e: NostrEvent) => parseProfile<ShopperProfileContent>(e, KIND.shopperProfile);
-export const parseEscrowProfile = (e: NostrEvent) => parseProfile<EscrowProfileContent>(e, KIND.escrowProfile);
+/** A profile whose content does not fit its schema is ignored, so pages never see malformed fields. */
+function parseProfile<T>(e: NostrEvent, kind: number, check: Check<T>): Profile<T> | undefined {
+  if (e.kind !== kind || !verified(e)) return undefined;
+  const content = parseJson(e.content, check);
+  return content ? { pubkey: e.pubkey, version: eventVersion(e), content, event: e } : undefined;
+}
+
+export const parseShopperProfile = (e: NostrEvent) => parseProfile(e, KIND.shopperProfile, shopperProfileContent);
+export const parseEscrowProfile = (e: NostrEvent) => parseProfile(e, KIND.escrowProfile, escrowProfileContent);
 
 // ---- builders (unsigned templates; sign with an IdentitySigner) ----
 

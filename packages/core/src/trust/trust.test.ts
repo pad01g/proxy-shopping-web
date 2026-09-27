@@ -125,4 +125,35 @@ describe('TrustDirectory', () => {
     // the list allows usdc but the shopper profile does not
     expect(dir.offers({ ...q, payment: 'usdc-evm' })).toHaveLength(0);
   });
+
+  it('ignores profiles and list rows that do not fit their schema', async () => {
+    const net = new MemoryRelayNetwork();
+    const t = net.transport();
+    const relays = ['wss://relay-1.test'];
+    const c = key();
+    const op = key();
+    const good = key();
+    const bad = key();
+    await t.publish(relays, finalizeEvent(delegationTemplate({ operator: op.pk, version: 1, network: NET }), c.sk));
+    const content = list([{ shopper: good.pk }, { shopper: bad.pk }]);
+    // one malformed row (escrow_sla_days as a string, unknown payment) must not drop the others
+    (content.entries as unknown[]).push({ region: 'JP-13', shopper: 'not-hex', escrow: pk('e') });
+    await t.publish(relays, finalizeEvent(operatorListTemplate(content, 1), op.sk));
+    const profile = { name: 'ok', payments: ['btc-signet', 'lightning'], currencies: null, cash_regions: [], fee: { bps: 500 }, delivery_days: 5 };
+    await t.publish(relays, finalizeEvent(shopperProfileTemplate(profile as never, NET, 1), good.sk));
+    // Home / NewOrder read content.name and content.fee.bps: a profile without them is ignored
+    await t.publish(relays, finalizeEvent(shopperProfileTemplate({ name: 7, fee: 'free' } as never, NET, 1), bad.sk));
+    const dir = new TrustDirectory({ transport: t, storage: new MemoryStorage(), network: NET, relays: () => relays, coordinators: () => [c.pk] });
+    const snap = await dir.refresh();
+    expect(snap.entries.map((e) => e.shopper)).toEqual([good.pk, bad.pk]);
+    expect(snap.shoppers.get(good.pk)?.content).toMatchObject({ name: 'ok', payments: ['btc-signet'], currencies: [] });
+    expect(snap.shoppers.has(bad.pk)).toBe(false);
+  });
+
+  it('requires the list content network to equal d', () => {
+    const op = key();
+    const ev = finalizeEvent({ ...operatorListTemplate(list([{}]), 1), tags: [['d', NET], ['v', '1']], content: JSON.stringify({ ...list([{}]), network: 'ps-main' }) }, op.sk);
+    expect(parseOperatorList(ev)).toBeUndefined();
+  });
 });
+

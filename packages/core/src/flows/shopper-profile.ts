@@ -1,5 +1,5 @@
 import { KIND } from '../nostr/kinds.js';
-import { shopperProfileTemplate } from '../trust/events.js';
+import { parseShopperProfile, shopperProfileTemplate } from '../trust/events.js';
 import type { ShopperProfileContent } from '../trust/types.js';
 import type { Session } from './session.js';
 
@@ -21,7 +21,7 @@ export class ShopperProfile {
 
   async current(): Promise<ShopperProfileContent | undefined> {
     const ev = await this.s.ownLatest(KIND.shopperProfile, this.s.network);
-    return ev ? (JSON.parse(ev.content) as ShopperProfileContent) : undefined;
+    return ev ? parseShopperProfile(ev)?.content : undefined;
   }
 
   async publish(content: ShopperProfileContent) {

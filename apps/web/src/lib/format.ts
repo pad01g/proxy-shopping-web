@@ -2,15 +2,28 @@ import { formatUnits, type Payment } from '@proxy-shopping/core/browser';
 
 export const short = (s?: string, n = 8): string => (!s ? '' : s.length <= n * 2 + 1 ? s : `${s.slice(0, n)}…${s.slice(-4)}`);
 
+/** Base-unit amount for display; anything that is not an unsigned integer is shown as "?" rather than throwing. */
 export function formatAsset(amount: string | bigint | undefined, asset?: Payment | string): string {
   if (amount === undefined || amount === '') return '-';
+  if (typeof amount === 'string' && !/^-?\d{1,40}$/.test(amount)) return '?';
   const v = typeof amount === 'bigint' ? amount : BigInt(amount);
   if (asset === 'btc-signet') return `${v.toLocaleString()} sats (${formatUnits(v, 8)} sBTC)`;
   if (asset === 'usdc-evm') return `${formatUnits(v, 6)} USDC`;
   return v.toString();
 }
 
-export const formatTime = (unix: number): string => new Date(unix * 1000).toLocaleString('ja-JP');
+export const formatTime = (unix: number): string =>
+  Number.isFinite(unix) && unix > 0 ? new Date(unix * 1000).toLocaleString('ja-JP') : '-';
+
+/** "あと 3 日 4 時間" / "経過済み" for a UNIX time. */
+export function countdown(unix: number, now = Math.floor(Date.now() / 1000)): string {
+  const d = unix - now;
+  if (d <= 0) return '経過済み';
+  const days = Math.floor(d / 86400);
+  const hours = Math.floor((d % 86400) / 3600);
+  const mins = Math.floor((d % 3600) / 60);
+  return days ? `あと ${days} 日 ${hours} 時間` : hours ? `あと ${hours} 時間 ${mins} 分` : `あと ${mins} 分`;
+}
 
 export const PAYMENT_LABEL: Record<string, string> = {
   'btc-signet': 'BTC (signet)',

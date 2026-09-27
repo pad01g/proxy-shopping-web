@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { FileStorage } from './file.js';
 import { IndexedDBStorage } from './indexeddb.js';
 import { MemoryStorage } from './memory.js';
+import { decryptWithPassphrase, encryptWithPassphrase } from './vault.js';
 import { ScopedStorage, type Storage } from './types.js';
 
 async function exercise(s: Storage) {
@@ -45,4 +46,36 @@ describe('storage backends', () => {
   });
 
   it('indexeddb', async () => exercise(await IndexedDBStorage.open(`test-${Math.random()}`)));
+
+  it('indexeddb databases can be closed and deleted (logout)', async () => {
+    const name = `test-${Math.random()}`;
+    const s = await IndexedDBStorage.open(name);
+    await s.put('user/orders/x', { id: 'x' });
+    s.close();
+    await IndexedDBStorage.deleteDatabase(name);
+    expect(await (await IndexedDBStorage.open(name)).get('user/orders/x')).toBeUndefined();
+  });
+});
+
+describe('vault (mnemonic at rest)', () => {
+  const words = 'news hybrid corn purchase public hedgehog clay survey able alter supreme shove';
+
+  it('encrypts with PBKDF2-SHA256 (600k) + AES-GCM and needs the passphrase back', async () => {
+    const secret = await encryptWithPassphrase(words, 'correct horse');
+    expect(secret).toMatchObject({ v: 1, kdf: 'PBKDF2-SHA256', iterations: 600_000 });
+    expect(JSON.stringify(secret)).not.toContain('hedgehog');
+    expect(await decryptWithPassphrase(secret, 'correct horse')).toBe(words);
+    await expect(decryptWithPassphrase(secret, 'wrong')).rejects.toThrow(/wrong passphrase/);
+    // tampering is detected by the GCM tag
+    const ct = Buffer.from(secret.ct, 'base64');
+    ct[0] ^= 1;
+    await expect(decryptWithPassphrase({ ...secret, ct: ct.toString('base64') }, 'correct horse')).rejects.toThrow();
+  });
+
+  it('uses a fresh salt and iv each time', async () => {
+    const [a, b] = await Promise.all([encryptWithPassphrase('x', 'p', 1000), encryptWithPassphrase('x', 'p', 1000)]);
+    expect(a.salt).not.toBe(b.salt);
+    expect(a.iv).not.toBe(b.iv);
+    await expect(encryptWithPassphrase('x', '')).rejects.toThrow();
+  });
 });

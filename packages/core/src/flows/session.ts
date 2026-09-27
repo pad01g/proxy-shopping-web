@@ -11,6 +11,8 @@ import { ScopedStorage, type Storage } from '../storage/types.js';
 import { TrustDirectory } from '../trust/directory.js';
 import { verified } from '../trust/events.js';
 import { latestByAddress, eventVersion } from '../trust/versions.js';
+import { nowSeconds } from '../util/time.js';
+import type { TimelockPolicy } from './timelock-policy.js';
 
 export interface SessionConfig {
   network: string;
@@ -20,6 +22,12 @@ export interface SessionConfig {
   /** Minimum relays per message (§4.2). */
   k?: number;
   retryIntervalMs?: number;
+  /** User-side timelock policy (§4.5.1); defaults per spec when absent. */
+  timelockPolicy?: TimelockPolicy;
+  /** Lab only: allow ws:// / http:// and private addresses for peer relays (§4.10). */
+  allowPrivateEndpoints?: boolean;
+  /** Cap for the BTC funding fee rate in sat/vB (default 50). */
+  maxFeeRate?: number;
 }
 
 export interface SessionOptions {
@@ -69,6 +77,7 @@ export class Session {
       relays: this.cfg.relays,
       k: this.cfg.k,
       retryIntervalMs: this.cfg.retryIntervalMs,
+      allowPrivateRelays: this.cfg.allowPrivateEndpoints,
     });
     this.directory = new TrustDirectory({
       transport: this.transport,
@@ -123,10 +132,14 @@ export class Session {
     return latestByAddress(all)[0];
   }
 
-  /** Next version for our own event (§2.1: versions only grow). */
+  /**
+   * Next version for our own event (§2.1: versions only grow). Like the Go node this is
+   * max(known + 1, now): if local storage was lost and relays are unreachable, a plain
+   * known + 1 would restart at 1 and be shadowed by (or roll back to) an older published version.
+   */
   async nextVersion(kind: number, d: string): Promise<number> {
     const cur = await this.ownLatest(kind, d);
-    return cur ? eventVersion(cur) + 1 : 1;
+    return Math.max(cur ? eventVersion(cur) + 1 : 1, nowSeconds());
   }
 
   /** Sign, remember and publish one of our addressable events. */

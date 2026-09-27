@@ -1,7 +1,7 @@
 import { generateSecretKey } from 'nostr-tools/pure';
 import { describe, expect, it } from 'vitest';
 import { LocalSigner } from '../keys/signer.js';
-import { decryptAddress, encryptAddress, sealDelivery, unwrapDeliveryKey } from './delivery.js';
+import { decryptAddress, encryptAddress, keyForEscrowSha256, sealDelivery, unwrapDeliveryKey } from './delivery.js';
 
 const ORDER = '0123456789abcdef0123456789abcdef';
 const ADDRESS = { name: '山田太郎', postal_code: '160-0022', address: '東京都新宿区新宿1-1-1', phone: '03-0000-0000' };
@@ -19,11 +19,21 @@ describe('delivery (§4.4)', () => {
     const user = new LocalSigner(generateSecretKey());
     const shopper = new LocalSigner(generateSecretKey());
     const escrow = new LocalSigner(generateSecretKey());
-    const { envelope } = await sealDelivery({ signer: user, orderId: ORDER, address: ADDRESS, shopper: shopper.pubkey, escrow: escrow.pubkey });
-    for (const [who, wrapped] of [[shopper, envelope.key_for_shopper], [escrow, envelope.key_for_escrow]] as const) {
+    const { envelope, keyForEscrow } = await sealDelivery({ signer: user, orderId: ORDER, address: ADDRESS, shopper: shopper.pubkey, escrow: escrow.pubkey });
+    // The request only commits to the escrow's wrapped key (§4.4): a notice copy reveals nothing.
+    expect(envelope).not.toHaveProperty('key_for_escrow');
+    expect(envelope.key_for_escrow_sha256).toBe(keyForEscrowSha256(keyForEscrow));
+    expect(JSON.stringify(envelope)).not.toContain(keyForEscrow);
+    for (const [who, wrapped] of [[shopper, envelope.key_for_shopper], [escrow, keyForEscrow]] as const) {
       const k = await unwrapDeliveryKey(who, user.pubkey, wrapped);
       expect(decryptAddress(k, ORDER, envelope.ciphertext)).toEqual(ADDRESS);
     }
     await expect(unwrapDeliveryKey(escrow, user.pubkey, envelope.key_for_shopper)).rejects.toThrow();
+  });
+
+  it('rejects a decrypted address that is not an Address', () => {
+    const key = new Uint8Array(32).fill(9);
+    const ct = encryptAddress(key, ORDER, { name: 1 } as never);
+    expect(() => decryptAddress(key, ORDER, ct)).toThrow(/name/);
   });
 });

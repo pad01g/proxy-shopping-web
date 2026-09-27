@@ -66,3 +66,6 @@ th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line
 .offer { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
 .offer.selected { border-color: var(--accent); box-shadow: 0 0 0 2px #1f6feb33; }
 .copyable { display: inline-flex; gap: 6px; align-items: center; }
+.modal-backdrop { position: fixed; inset: 0; background: #0006; display: flex; align-items: center; justify-content: center; z-index: 10; padding: 16px; }
+.modal { max-width: 560px; width: 100%; margin: 0; }
+.countdown { color: var(--muted); font-size: 12px; margin-left: 6px; }

@@ -25,6 +25,8 @@ until docker logs "$P-lab" 2>&1 | grep -q "minilab ready"; do
 done
 docker logs "$P-lab" 2>&1 | tail -3
 
-docker run --rm --network "$NET" -v "$ROOT":/src -w /src/apps/web -e APP_URL=http://lab:8080 \
-  mcr.microsoft.com/playwright:v1.55.0-noble npx playwright test -c e2e/playwright.config.ts "$@" || {
+# The app must run in a secure context (WebCrypto for the mnemonic, Web Locks), and plain http is only
+# secure on localhost: forward localhost:8080 in the browser container to the mini lab.
+docker run --rm --network "$NET" -v "$ROOT":/src -w /src/apps/web -e APP_URL=http://localhost:8080 -e FORWARD_TO=lab:8080 \
+  mcr.microsoft.com/playwright:v1.55.0-noble sh -c 'node e2e/forward.mjs & npx playwright test -c e2e/playwright.config.ts "$@"' sh "$@" || {
     echo "--- minilab log ---"; docker logs "$P-lab" 2>&1 | tail -40; exit 1; }

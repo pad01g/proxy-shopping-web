@@ -58,6 +58,34 @@ export class BitcoindRpc {
 }
 
 /**
+ * Esplora-style outspend from bitcoind: gettxout says whether the output is unspent (mempool
+ * included); the spender is looked up in the mempool and the last blocks.
+ */
+async function outspend(rpc: BitcoindRpc, txid: string, vout: number) {
+  await rpc.call('getrawtransaction', txid, false); // 404-like error for unknown transactions
+  if (await rpc.call<unknown>('gettxout', txid, vout, true)) return { spent: false };
+  type Tx = { txid: string; vin: Array<{ txid?: string; vout?: number }> };
+  const find = (txs: Tx[]) => {
+    for (const tx of txs) {
+      const vin = tx.vin.findIndex((i) => i.txid === txid && i.vout === vout);
+      if (vin >= 0) return { txid: tx.txid, vin };
+    }
+    return undefined;
+  };
+  const pool = await rpc.call<string[]>('getrawmempool');
+  const inPool = find(await Promise.all(pool.map((id) => rpc.call<Tx>('getrawtransaction', id, true))));
+  if (inPool) return { spent: true, ...inPool, status: { confirmed: false } };
+  const tip = await rpc.call<number>('getblockcount');
+  for (let h = tip; h > Math.max(0, tip - 50); h--) {
+    const hash = await rpc.call<string>('getblockhash', h);
+    const block = await rpc.call<{ tx: Tx[] }>('getblock', hash, 2);
+    const hit = find(block.tx);
+    if (hit) return { spent: true, ...hit, status: { confirmed: true, block_height: h, block_hash: hash } };
+  }
+  return { spent: true };
+}
+
+/**
  * The Esplora routes core uses, served from bitcoind RPC. Only confirmed
  * UTXOs are listed (scantxoutset), which is fine because tests mine after
  * each broadcast.
@@ -94,6 +122,9 @@ export async function startEsploraShim(rpc: BitcoindRpc, opts: { port?: number; 
         if (!tx.confirmations) return send(200, JSON.stringify({ confirmed: false }), 'application/json');
         const header = await rpc.call<{ height: number }>('getblockheader', tx.blockhash);
         return send(200, JSON.stringify({ confirmed: true, block_height: header.height, block_hash: tx.blockhash }), 'application/json');
+      }
+      if ((m = /^\/tx\/([0-9a-f]{64})\/outspend\/(\d+)$/.exec(p))) {
+        return send(200, JSON.stringify(await outspend(rpc, m[1], Number(m[2]))), 'application/json');
       }
       if (p === '/blocks/tip/height') return send(200, String(await rpc.call<number>('getblockcount')));
       if (p === '/fee-estimates') return send(200, JSON.stringify({ '1': 2, '6': 1 }), 'application/json');

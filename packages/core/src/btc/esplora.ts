@@ -13,6 +13,14 @@ export interface TxStatus {
   block_hash?: string;
 }
 
+/** Esplora /tx/{txid}/outspend/{vout}. */
+export interface Outspend {
+  spent: boolean;
+  txid?: string;
+  vin?: number;
+  status?: TxStatus;
+}
+
 /** The subset of the Esplora HTTP API we use. */
 export interface ChainApi {
   utxos(address: string): Promise<Utxo[]>;
@@ -20,6 +28,8 @@ export interface ChainApi {
   broadcast(txHex: string): Promise<string>;
   tipHeight(): Promise<number>;
   txStatus(txid: string): Promise<TxStatus>;
+  /** Whether output `vout` of `txid` is spent, and by which transaction (§4.8 settlement checks). */
+  outspend(txid: string, vout: number): Promise<Outspend>;
   feeEstimates(): Promise<Record<string, number>>;
 }
 
@@ -55,7 +65,20 @@ export class EsploraClient implements ChainApi {
   }
 
   async tipHeight(): Promise<number> {
-    return Number((await (await this.get('/blocks/tip/height')).text()).trim());
+    const h = Number((await (await this.get('/blocks/tip/height')).text()).trim());
+    if (!Number.isSafeInteger(h) || h < 0) throw new Error('esplora: bad tip height');
+    return h;
+  }
+
+  async outspend(txid: string, vout: number): Promise<Outspend> {
+    if (!/^[0-9a-f]{64}$/.test(txid) || !Number.isSafeInteger(vout) || vout < 0) throw new Error('bad outpoint');
+    const o = (await (await this.get(`/tx/${txid}/outspend/${vout}`)).json()) as Partial<Outspend>;
+    return {
+      spent: o.spent === true,
+      txid: typeof o.txid === 'string' && /^[0-9a-f]{64}$/.test(o.txid) ? o.txid : undefined,
+      vin: typeof o.vin === 'number' ? o.vin : undefined,
+      status: o.status,
+    };
   }
 
   async txStatus(txid: string): Promise<TxStatus> {
@@ -67,14 +90,22 @@ export class EsploraClient implements ChainApi {
   }
 }
 
-/** sat/vB for a confirmation target, falling back to 1 when the node has no estimate (quiet signet). */
-export async function feeRateFor(chain: ChainApi, target = 6): Promise<number> {
+/** Default cap on the funding fee rate: the Esplora server chooses the estimate, so it must be bounded. */
+export const DEFAULT_MAX_FEE_RATE = 50;
+
+/**
+ * sat/vB for a confirmation target, falling back to 1 when the node has no estimate (quiet signet),
+ * and never above `maxFeeRate`.
+ */
+export async function feeRateFor(chain: ChainApi, target = 6, maxFeeRate = DEFAULT_MAX_FEE_RATE): Promise<number> {
+  let rate = 1;
   try {
     const est = await chain.feeEstimates();
-    const keys = Object.keys(est).map(Number).filter((k) => k >= target).sort((a, b) => a - b);
-    const rate = est[String(keys[0] ?? target)];
-    return rate && rate > 1 ? rate : 1;
+    const keys = Object.keys(est).map(Number).filter((k) => Number.isFinite(k) && k >= target).sort((a, b) => a - b);
+    const r = Number(est[String(keys[0] ?? target)]);
+    if (Number.isFinite(r) && r > 1) rate = r;
   } catch {
-    return 1;
+    /* keep 1 sat/vB */
   }
+  return Math.min(rate, maxFeeRate);
 }

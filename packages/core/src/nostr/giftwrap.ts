@@ -15,13 +15,16 @@ export interface InnerFields {
   createdAt?: number;
 }
 
+/** Types that may be sent outside an order; Go omits the `o` tag when the order id is empty. */
+export const ORDERLESS_TYPES: readonly string[] = ['ack'];
+
 export async function signInner(signer: IdentitySigner, f: InnerFields): Promise<Inner> {
   const ev = await signer.signEvent({
     kind: KIND.inner,
     created_at: f.createdAt ?? nowSeconds(),
     tags: [
       ['p', f.recipient],
-      ['o', f.orderId],
+      ...(f.orderId || !ORDERLESS_TYPES.includes(f.type) ? [['o', f.orderId]] : []),
       ['t', f.type],
     ],
     content: JSON.stringify(f.body),
@@ -59,9 +62,16 @@ export function plainEvent(e: NostrEvent): NostrEvent {
 export function isValidInner(e: unknown): e is Inner {
   if (!e || typeof e !== 'object') return false;
   const ev = e as NostrEvent;
-  if (ev.kind !== KIND.inner) return false;
-  if (!tagValue(ev.tags ?? [], 'o') || !tagValue(ev.tags ?? [], 't')) return false;
-  return verifyEvent(plainEvent(ev));
+  if (ev.kind !== KIND.inner || !Array.isArray(ev.tags)) return false;
+  const type = tagValue(ev.tags, 't');
+  if (!type || !tagValue(ev.tags, 'p')) return false;
+  // Order messages need their order id; acks for order-less messages may leave it out.
+  if (!tagValue(ev.tags, 'o') && !ORDERLESS_TYPES.includes(type)) return false;
+  try {
+    return verifyEvent(plainEvent(ev));
+  } catch {
+    return false;
+  }
 }
 
 export function innerMeta(inner: Inner): { orderId: string; type: string; recipient: string } {
@@ -83,12 +93,13 @@ export function innerBody<T = unknown>(inner: Inner): T {
 export async function unwrap(signer: IdentitySigner, wrap: NostrEvent): Promise<Inner> {
   if (wrap.kind !== KIND.giftWrap) throw new Error('not a gift wrap');
   if (!verifyEvent(plainEvent(wrap))) throw new Error('bad wrap signature');
+  const me = await signer.getPublicKey();
+  if (tagValue(wrap.tags, 'p') !== me) throw new Error('wrap not addressed to us');
   const seal = JSON.parse(await signer.nip44Decrypt(wrap.pubkey, wrap.content)) as NostrEvent;
   if (seal.kind !== KIND.seal || !verifyEvent(plainEvent(seal))) throw new Error('bad seal');
   const inner = JSON.parse(await signer.nip44Decrypt(seal.pubkey, seal.content)) as NostrEvent;
   if (!isValidInner(inner)) throw new Error('bad inner');
   if (inner.pubkey !== seal.pubkey) throw new Error('seal/inner pubkey mismatch');
-  const me = await signer.getPublicKey();
   if (tagValue(inner.tags, 'p') !== me) throw new Error('inner not addressed to us');
   return plainEvent(inner);
 }

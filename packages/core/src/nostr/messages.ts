@@ -33,6 +33,12 @@ export interface TrackingStatus {
 export interface DeliveryEnvelope {
   ciphertext: string;
   key_for_shopper: string;
+  /** hex(SHA-256(key_for_escrow)); the key itself travels in order.escrow_key (§4.4). */
+  key_for_escrow_sha256: string;
+}
+
+/** order.escrow_key (user → shopper): NIP-44(user→escrow, hex(K)), handed to the escrow only in a dispute. */
+export interface OrderEscrowKey {
   key_for_escrow: string;
 }
 
@@ -45,6 +51,8 @@ export interface OrderRequest {
   operator: string;
   coordinator: string;
   delivery: DeliveryEnvelope;
+  /** §4.4.1: binds the signing Nostr identity to the chain key put into the multisig. */
+  key_proof: string;
   user_btc_pubkey?: string;
   user_btc_address?: string;
   user_evm_address?: string;
@@ -146,8 +154,9 @@ export interface DisputeEvidence {
   messages: Inner[];
   tracking: TrackingStatus[];
   purchase_evidence: Evidence[];
+  /** key_for_escrow from order.escrow_key; checked against the signed request's key_for_escrow_sha256. */
   delivery_key_for_escrow?: string;
-  delivery_ciphertext?: string;
+  text?: string;
 }
 
 export interface DisputeOpen {
@@ -187,6 +196,7 @@ export const MSG = {
   quote: 'order.quote',
   accept: 'order.accept',
   cancel: 'order.cancel',
+  escrowKey: 'order.escrow_key',
   funded: 'order.funded',
   escrowNotice: 'escrow.notice',
   purchased: 'order.purchased',

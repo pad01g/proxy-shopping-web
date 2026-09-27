@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildFundingTx, EsploraClient, EvmClient, KeySet, PoolTransport, erc20Abi } from '@proxy-shopping/core';
-import { createWorld, LAB_MNEMONICS } from '@proxy-shopping/core/testing';
+import { createWorld, LAB_MNEMONICS, LAB_TIMELOCK_POLICY } from '@proxy-shopping/core/testing';
 import { BitcoindRpc, startEsploraShim } from '@proxy-shopping/core/testing/node';
 import { numberToHex } from 'viem';
 
@@ -94,6 +94,9 @@ const config = {
   deployments_url: '/deployments/31337.json',
   rates: [{ type: 'static', rates: { 'BTC/JPY': 15000000, 'USDC/JPY': 150 } }],
   faucet_url: `http://${HOST}:3001`,
+  // same names and values as proxy-shopping-go/lab/web-config.json
+  timelock_policy: LAB_TIMELOCK_POLICY,
+  allow_private_endpoints: true,
 };
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.map': 'application/json' };
 createServer(async (req, res) => {

@@ -122,8 +122,9 @@ describe.skipIf(!!skip)('end-to-end flows over relay + bitcoind + anvil', () => 
       if (Date.now() > end) throw new Error('case not opened');
       await sleep(100);
     }
-    await world.escrow.rule(id, { user: '20000', shopper: '8000' }, '一部返金');
+    await world.escrow.rule(id, { user: '20000', shopper: '8100' }, '一部返金'); // fee 567 ≤ dispute_fee_bps 2 %
     await wait(id, 'ruled');
+    expect(await world.user.reviewRuling(id)).toEqual([]);
     const settled = await world.user.countersignRuling(id);
     await sleep(1500);
     const st = await world.sessions['user-1'].chain!.txStatus(settled.settledTxid!);

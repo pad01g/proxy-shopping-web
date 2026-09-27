@@ -17,7 +17,7 @@ export class MemoryRelayNetwork {
     return {
       publish: async (relays, event) => this.publish(relays, event),
       query: async (relays, filter) => this.query(relays, filter),
-      subscribe: (relays, filter, onEvent) => this.subscribe(relays, filter, onEvent),
+      subscribe: (relays, filter, onEvent, onEose) => this.subscribe(relays, filter, onEvent, onEose),
       close: () => {},
     };
   }
@@ -48,10 +48,11 @@ export class MemoryRelayNetwork {
     return [...seen.values()];
   }
 
-  private subscribe(relays: string[], filter: Filter, onEvent: (e: NostrEvent) => void): Subscription {
+  private subscribe(relays: string[], filter: Filter, onEvent: (e: NostrEvent) => void, onEose?: () => void): Subscription {
     const sub = { relays: new Set(unique(relays)), filter, onEvent };
     this.subs.add(sub);
     for (const e of this.query(relays, filter)) queueMicrotask(() => onEvent(e));
+    if (onEose) queueMicrotask(onEose);
     return { close: () => this.subs.delete(sub) };
   }
 }

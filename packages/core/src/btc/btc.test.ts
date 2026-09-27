@@ -3,6 +3,8 @@ import { Script } from '@scure/btc-signer';
 import { describe, expect, it } from 'vitest';
 import { KeySet } from '../keys/derive.js';
 import { toHex } from '../util/bytes.js';
+import { MemoryChain } from '../testing/memory-chain.js';
+import { feeRateFor } from './esplora.js';
 import { buildFundingTx } from './funding.js';
 import { p2wshAddress, witnessScript } from './script.js';
 import {
@@ -123,3 +125,19 @@ function verifySig(tx: ReturnType<typeof buildEscrowSpend>, sig: Uint8Array, pub
   const hash = tx.preimageWitnessV0(0, input.witnessScript!, 1, input.witnessUtxo!.amount);
   return secp256k1.verify(sig.slice(0, -1), hash, pubkey, { format: 'der' });
 }
+
+describe('fee rate (item 7)', () => {
+  it('caps the Esplora fee estimate and refuses absurd fee rates', async () => {
+    const chain = new MemoryChain();
+    chain.feeRate = 3;
+    expect(await feeRateFor(chain)).toBe(3);
+    chain.feeRate = 900; // a hostile or broken server
+    expect(await feeRateFor(chain)).toBe(50);
+    expect(await feeRateFor(chain, 6, 10)).toBe(10);
+    const utxos = [{ txid: 'bb'.repeat(32), vout: 0, value: 1_000_000, status: { confirmed: true } }];
+    const outputs = [{ address: WALLET.address, amount: 10_000n }];
+    expect(() => buildFundingTx({ wallet: WALLET, utxos, outputs, feeRate: 5000 })).toThrow(/fee rate/);
+    expect(() => buildFundingTx({ wallet: WALLET, utxos, outputs, feeRate: 60, maxFeeRate: 50 })).toThrow(/fee rate/);
+    expect(() => buildFundingTx({ wallet: WALLET, utxos, outputs, feeRate: Number.NaN })).toThrow(/fee rate/);
+  });
+});

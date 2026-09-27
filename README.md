@@ -44,11 +44,23 @@ Entry points: `@proxy-shopping/core` (portable), `/node` (+ `FileStorage`), `/br
 | btc | `witnessScript`, `p2wshAddress`, `EsploraClient`, `buildFundingTx`, `buildEscrowSpend`, `signEscrowInput`, `finalizeEscrowInput` (multisig / T1 / T2), PSBT base64 helpers |
 | evm | `safeInitializer`, `predictSafeAddress`, `orderSafeAddress`, `releaseSafeTx`, `splitSafeTx`, `encodeMultiSend`, `safeTxHash`, `signSafeTx`, `packSignatures`, `EvmClient` (deploy, fund, exec, module, bond) |
 | delivery | `encryptAddress`, `decryptAddress`, `sealDelivery`, `unwrapDeliveryKey` |
-| flows | `Session`, `UserClient`, `EscrowClient`, `OperatorClient`, `CoordinatorClient`, `ShopperProfile`, `checkQuote` |
+| flows | `Session`, `UserClient`, `EscrowClient`, `OperatorClient`, `CoordinatorClient`, `ShopperProfile`, `checkQuote`, `checkTimelock`, `btcPayoutProblems` / `safePayoutProblems` (§4.10 templates), `escrowSpent` |
+| checks | `parseBody` / `BODY_SCHEMAS` (every message body is schema-checked at the Messenger boundary), `signKeyProof*` / `verifyRequestKeyProof` (§4.4.1), `endpointProblem`, `encryptWithPassphrase` |
 
 ## Notes
 
-- The mnemonic is stored unencrypted in the origin's IndexedDB (lab grade).
+- The mnemonic is stored in the origin's IndexedDB encrypted with a passphrase (PBKDF2-SHA256, 600k iterations,
+  AES-GCM via WebCrypto); plaintext only if the user explicitly opts out at onboarding. WebCrypto needs a secure
+  context (https or localhost) — `scripts/e2e-web.sh` forwards localhost:8080 in the browser container for that.
+- Funds never move without a click and an in-page confirmation (fund, release, countersign, refunds). The shopper's
+  cooperative refund is shown for review, never auto-signed. Terminal states (`completed`, `settled`) wait for the
+  chain (BTC `/tx/{txid}/outspend/{vout}`, USDC Safe balance 0 + receipt).
+- `config.json` fields beyond the endpoints: `timelock_policy` (§4.5.1; names as in `proxy-shopping-go/lab/web-config.json`,
+  spec defaults when absent), `allow_private_endpoints` (lab only: http/ws and private hosts), `max_fee_rate` (sat/vB, default 50).
+  Endpoints must otherwise be https / wss; relays from peers' kind 10050 are limited to 8 public wss relays.
+- Only one tab runs the protocol at a time (Web Locks, BroadcastChannel fallback).
+- `apps/web/nginx.conf` sets CSP, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, `X-Frame-Options`;
+  HSTS belongs to the TLS terminator. Production builds have no source maps.
 - The browser talks to Esplora, the EVM RPC, rate sources and the faucet directly, so those
   endpoints must send CORS headers.
 - UI test ids: `apps/web/TESTIDS.md`.
