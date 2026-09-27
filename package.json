@@ -1,0 +1,18 @@
+{
+  "name": "proxy-shopping-web",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @proxy-shopping/core && npm run build -w @proxy-shopping/web",
+    "test": "npm test -w @proxy-shopping/core",
+    "test:integration": "npm run test:integration -w @proxy-shopping/core",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3"
+  }
+}
