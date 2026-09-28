@@ -2,7 +2,8 @@ import { type Offer, type Payment } from '@proxy-shopping/core/browser';
 import { useEffect, useState } from 'react';
 import { ActionButton, Explain, Field, Mono, Section } from '../../components/ui';
 import { PAYMENT_LABEL, short } from '../../lib/format';
-import { DEMO_ADDRESS, REGION_PRESETS, SHOP_PRESETS } from '../../scenarios/presets';
+import { messagesFor, useLang, useT } from '../../i18n';
+import { REGION_PRESETS, SHOP_PRESETS, type PresetId } from '../../scenarios/presets';
 import type { OrderPreset } from '../../scenarios/types';
 import { useApp, useDemoState, useRuntime } from '../../state';
 
@@ -20,10 +21,15 @@ function useOrderForm() {
 
 export function NewOrderForm({ onCreated }: { onCreated: (id: string) => void }) {
   const app = useApp();
+  const m = useT();
+  const u = m.user;
+  const lang = useLang();
   const rt = useRuntime('user');
   const [form, setForm] = useOrderForm();
   const [qty, setQty] = useState(1);
-  const [address, setAddress] = useState(DEMO_ADDRESS);
+  const [address, setAddress] = useState(m.presets.address);
+  // The prefilled demo address follows the language.
+  useEffect(() => setAddress(messagesFor(lang).presets.address), [lang]);
   const [offers, setOffers] = useState<Offer[]>();
   const [chosen, setChosen] = useState<string>();
 
@@ -46,8 +52,8 @@ export function NewOrderForm({ onCreated }: { onCreated: (id: string) => void })
   const submit = async () => {
     // The candidates may predate the operator's latest list: search again when ours is not among them.
     const offer = pick(offers ?? []) ?? pick(await search());
-    if (!offer) throw new Error('このデモの escrow の組み合わせが候補にありません。ガイドの「準備」の手順（委任・一覧・escrow のプロフィール）を済ませるか、候補を選んでください');
-    if (!form.sku.trim() || qty < 1) throw new Error('商品と数量を入れてください');
+    if (!offer) throw new Error(u.noDemoOffer);
+    if (!form.sku.trim() || qty < 1) throw new Error(u.needItem);
     const order = await rt.client.createOrder({
       offer, shopUrl: form.shopUrl, region: form.region, items: [{ sku: form.sku.trim(), qty }], payment: form.payment, address,
     });
@@ -56,50 +62,47 @@ export function NewOrderForm({ onCreated }: { onCreated: (id: string) => void })
 
   const selected = offers && pick(offers);
   return (
-    <Section title="注文する" testid="new-order">
-      <Explain>
-        店と商品を選ぶと、信頼している coordinator → operator の一覧から、その地域を扱う shopper × escrow の組み合わせ（候補）を探します。
-        注文すると、届け先を暗号化した依頼（order.request）が shopper に届き、shopper が見積を返します。
-      </Explain>
+    <Section title={u.newOrder} testid="new-order">
+      <Explain>{u.newOrderExplain}</Explain>
       <div className="row presets">
         {SHOP_PRESETS.map((p) => (
           <button key={p.id} type="button" className={`plain small${p.id === form.id ? ' selected' : ''}`} data-testid={`order-preset-${p.id}`} onClick={() => setForm(p)}>
-            {p.label}
+            {m.presets.shop[p.id as PresetId]}
           </button>
         ))}
       </div>
       <div className="grid2">
-        <Field label="店の URL">
+        <Field label={u.shopUrl}>
           <input data-testid="order-shop-url" value={form.shopUrl} onChange={(e) => setForm({ ...form, id: 'custom', shopUrl: e.target.value })} />
         </Field>
-        <Field label="商品の SKU と数量">
+        <Field label={u.skuQty}>
           <div className="row">
             <input data-testid="order-sku" value={form.sku} onChange={(e) => setForm({ ...form, id: 'custom', sku: e.target.value })} />
             <input data-testid="order-qty" type="number" min={1} max={99} style={{ maxWidth: 80 }} value={qty} onChange={(e) => setQty(Number(e.target.value))} />
           </div>
         </Field>
-        <Field label="店の地域コード">
+        <Field label={u.region}>
           <div className="row">
             <input data-testid="order-region" value={form.region} onChange={(e) => setForm({ ...form, id: 'custom', region: e.target.value })} />
             <select data-testid="order-region-preset" value="" onChange={(e) => e.target.value && setForm({ ...form, id: 'custom', region: e.target.value })}>
-              <option value="">よく使う地域…</option>
-              {REGION_PRESETS.map((r) => <option key={r.code} value={r.code}>{r.code}（{r.label}）</option>)}
+              <option value="">{u.regionPreset}</option>
+              {REGION_PRESETS.map((r) => <option key={r} value={r}>{u.regionOption(r, m.presets.region[r])}</option>)}
             </select>
           </div>
         </Field>
-        <Field label="支払い">
+        <Field label={u.payment}>
           <select data-testid="order-payment" value={form.payment} onChange={(e) => setForm({ ...form, id: 'custom', payment: e.target.value as Payment })}>
             {Object.entries(PAYMENT_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
         </Field>
       </div>
 
-      <h3>shopper × escrow の候補</h3>
+      <h3>{u.offers}</h3>
       <div className="row">
-        <ActionButton testid="order-search" kind="plain" onClick={search}>候補を探し直す</ActionButton>
+        <ActionButton testid="order-search" kind="plain" onClick={search}>{u.search}</ActionButton>
       </div>
       <div data-testid="offers" data-count={offers?.length ?? 0}>
-        {offers?.length === 0 && <p className="muted" data-testid="offers-empty">条件に合う組み合わせはありません。</p>}
+        {offers?.length === 0 && <p className="muted" data-testid="offers-empty">{u.offersEmpty}</p>}
         {offers?.map((o) => {
           const k = offerKey(o);
           const isDemo = o.entry.shopper === app.shopper.pubkey && o.entry.escrow === app.ids.escrow.pubkey;
@@ -107,11 +110,12 @@ export function NewOrderForm({ onCreated }: { onCreated: (id: string) => void })
             <label key={k} className={`offer${selected && offerKey(selected) === k ? ' selected' : ''}`} data-testid="offer" data-escrow={o.entry.escrow} data-shopper={o.entry.shopper}>
               <input type="radio" name="offer" checked={!!selected && offerKey(selected) === k} onChange={() => setChosen(k)} />
               <span>
-                <strong>{o.shopper?.content.name ?? short(o.entry.shopper)}</strong> × <strong>{o.escrow?.content.name ?? short(o.entry.escrow)}</strong>
+                {/* Profile names are what the shopper and the escrow published (in their own language). */}
+                <strong data-i18n-exempt="profile name">{o.shopper?.content.name ?? short(o.entry.shopper)}</strong> × <strong data-i18n-exempt="profile name">{o.escrow?.content.name ?? short(o.entry.escrow)}</strong>
                 <span className="badge">{o.entry.region}</span>
-                {isDemo && <span className="badge ok">このデモの escrow</span>}
+                {isDemo && <span className="badge ok">{u.demoEscrow}</span>}
                 <span className="muted small">
-                  {' '}出所: coordinator <Mono>{short(o.entry.provenance.coordinator)}</Mono> → operator <Mono>{short(o.entry.provenance.operator)}</Mono>（一覧 v{o.entry.provenance.listVersion}）
+                  {' '}{u.provenance}coordinator <Mono>{short(o.entry.provenance.coordinator)}</Mono> → operator <Mono>{short(o.entry.provenance.operator)}</Mono>{u.listVersion(o.entry.provenance.listVersion)}
                 </span>
               </span>
             </label>
@@ -119,14 +123,14 @@ export function NewOrderForm({ onCreated }: { onCreated: (id: string) => void })
         })}
       </div>
 
-      <h3>届け先（暗号化して shopper と escrow にだけ渡します）</h3>
+      <h3>{u.addressTitle}</h3>
       <div className="grid2">
-        <Field label="氏名"><input data-testid="address-name" value={address.name} onChange={(e) => setAddress({ ...address, name: e.target.value })} /></Field>
-        <Field label="郵便番号"><input data-testid="address-postal-code" value={address.postal_code} onChange={(e) => setAddress({ ...address, postal_code: e.target.value })} /></Field>
-        <Field label="住所"><input data-testid="address-address" value={address.address} onChange={(e) => setAddress({ ...address, address: e.target.value })} /></Field>
-        <Field label="電話"><input data-testid="address-phone" value={address.phone} onChange={(e) => setAddress({ ...address, phone: e.target.value })} /></Field>
+        <Field label={u.name}><input data-testid="address-name" value={address.name} onChange={(e) => setAddress({ ...address, name: e.target.value })} /></Field>
+        <Field label={u.postalCode}><input data-testid="address-postal-code" value={address.postal_code} onChange={(e) => setAddress({ ...address, postal_code: e.target.value })} /></Field>
+        <Field label={u.address}><input data-testid="address-address" value={address.address} onChange={(e) => setAddress({ ...address, address: e.target.value })} /></Field>
+        <Field label={u.phone}><input data-testid="address-phone" value={address.phone} onChange={(e) => setAddress({ ...address, phone: e.target.value })} /></Field>
       </div>
-      <ActionButton testid="order-submit" onClick={submit}>見積を依頼する</ActionButton>
+      <ActionButton testid="order-submit" onClick={submit}>{u.submit}</ActionButton>
     </Section>
   );
 }

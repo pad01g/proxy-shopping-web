@@ -1,4 +1,5 @@
 import { generateMnemonic, isValidMnemonic, KeySet } from '@proxy-shopping/core/browser';
+import { msg } from '../i18n';
 import type { SessionRole } from './roles';
 import { readJson, writeJson } from './storage';
 
@@ -21,7 +22,7 @@ export class KeyRing {
   private readonly cache = new Map<SessionRole, KeySet>();
 
   constructor(private readonly coordinatorMnemonic: string) {
-    if (!isValidMnemonic(coordinatorMnemonic)) throw new Error('demo-config.json の coordinator_mnemonic が BIP39 ではありません');
+    if (!isValidMnemonic(coordinatorMnemonic)) throw new Error(msg().app.badMnemonic);
   }
 
   keys(role: SessionRole): KeySet {

@@ -2,6 +2,21 @@
 
 The demo e2e (`proxy-shopping-go/e2e/src/demo`) drives the page only through these ids and the guide.
 
+## Language
+
+The page is in Japanese (default) or English. The header's switch (`lang-ja` / `lang-en`) stores the choice in localStorage
+(`ps-demo-lang`, kept by "デモを初期化"); `?lang=en` / `?lang=ja` overrides it for that page (not stored) and the switch rewrites it.
+`<html lang>` follows. Test ids, `data-*` values and scenario / step ids are the same in both languages.
+
+Messages live in `src/i18n`: `ja.ts` defines the keys (the `Messages` type), `en.ts` must provide every one of them (a missing key is
+a type error); components read them with `useT()`, code outside React with `msg()`. Core's timeline lines (`kind` + Japanese
+`text`) are rendered from their kind (`src/i18n/timeline.ts`); an unknown kind keeps core's text.
+
+`data-i18n-exempt="<why>"` marks the few elements that show data rather than UI copy, which the English e2e (`normal-btc-en`)
+skips when it looks for Japanese: other parties' free text (dispute text, ruling reason, report text, shopper's reject detail),
+published profile names and delegation notes, the decrypted address, core's and the node's error / history details, values
+inside timeline lines, the original text of unknown timeline kinds, and the "日本語" button (a language's own name).
+
 ## Guide and layout
 
 | testid | element | attributes |
@@ -16,6 +31,7 @@ The demo e2e (`proxy-shopping-go/e2e/src/demo`) drives the page only through the
 | `scenario-select` | scenario `<select>` (values: `normal-btc`, `normal-usdc`, `dispute-refund`, `sold-out`, `risky`, `fraud`, `timelock-t2`) | changing it starts a new run |
 | `scenario-restart` | "最初から": new run of the same scenario | |
 | `demo-reset` | "デモを初期化" (confirm dialog, then reload) | |
+| `lang-switch`, `lang-ja`, `lang-en` | language switch "日本語 / English" in the header | `lang-switch[data-lang]`, `lang-<ja\|en>[data-active]` |
 | `tab-<user\|shopper\|escrow\|operator\|coordinator\|lab>` | role tabs | `data-active` |
 | `panel-<tab>` | the open tab's panel | |
 | `role-elsewhere-<role>`, `role-takeover-<role>` | the role runs in another window; take it over | |

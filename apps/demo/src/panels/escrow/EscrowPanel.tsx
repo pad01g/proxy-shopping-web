@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
 import { IdentityCard } from '../../components/IdentityCard';
 import { Explain, Section } from '../../components/ui';
-import { formatTime, short, STATUS_LABEL } from '../../lib/format';
+import { label, useT } from '../../i18n';
+import { formatTime, short } from '../../lib/format';
 import { useDemoState, useLive, useRuntime } from '../../state';
 import { CaseDetail } from './CaseDetail';
 import { ProfileForm } from './ProfileForm';
 
 export function EscrowPanel() {
   const rt = useRuntime('escrow');
+  const m = useT();
   const { scenarioOrderId } = useDemoState();
   const [cases] = useLive(() => rt.client.listCases(), (cb) => rt.client.on('case', cb), [rt]);
   const [picked, setPicked] = useState<string>();
@@ -16,14 +18,11 @@ export function EscrowPanel() {
   const selected = picked ?? scenarioCase ?? cases?.[0]?.orderId;
   return (
     <div data-testid="panel-escrow">
-      <IdentityCard role="escrow" title="escrow の鍵" />
+      <IdentityCard role="escrow" title={m.escrow.identity} />
       <ProfileForm />
-      <Section title="案件" testid="escrow-cases">
-        <Explain>
-          利用者が入金すると「入金の通知」（escrow.notice）が届き、案件の控えができます。紛争が申し立てられると案件が開き、escrow は T1 より前に裁定する義務を負います
-          （前払い手数料を受け取った注文だけ）。
-        </Explain>
-        {!cases?.length && <p className="muted" data-testid="escrow-cases-empty">案件はまだありません。</p>}
+      <Section title={m.escrow.cases} testid="escrow-cases">
+        <Explain>{m.escrow.casesExplain}</Explain>
+        {!cases?.length && <p className="muted" data-testid="escrow-cases-empty">{m.escrow.casesEmpty}</p>}
         <table>
           <tbody>
             {cases?.map((c) => (
@@ -32,7 +31,7 @@ export function EscrowPanel() {
                 <td>{formatTime(c.updatedAt)}</td>
                 <td>user {short(c.user)} / shopper {short(c.shopper)}</td>
                 <td>{c.request?.payment}</td>
-                <td><span className="badge">{STATUS_LABEL[c.status] ?? c.status}</span></td>
+                <td><span className="badge">{label(m.format.status, c.status)}</span></td>
               </tr>
             ))}
           </tbody>

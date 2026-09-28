@@ -9,8 +9,8 @@ import type { CaseSnap, OrderSnap, Snapshots } from '../lib/snapshots';
 
 /** A shop, item and region to order; the new-order form is prefilled with the scenario's. */
 export interface OrderPreset {
+  /** A preset id (label in the catalogs' presets.shop), or 'custom' once the form was edited. */
   id: string;
-  label: string;
   shopUrl: string;
   region: string;
   sku: string;
@@ -59,7 +59,7 @@ export interface Step {
   /** The control to press; none for steps where the network, the shopper node or the chain acts. */
   action?: StepAction | ((ctx: GuideCtx) => StepAction | undefined);
   done(ctx: GuideCtx): boolean;
-  /** Live progress for waiting steps ("shopper ノードの状態: purchasing"). */
+  /** Live progress for waiting steps ("shopper-1 node: Purchasing…"), in the page's language. */
   progress?(ctx: GuideCtx): string | undefined;
 }
 

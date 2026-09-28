@@ -1,12 +1,12 @@
-import { isSessionRole, ROLE_LABEL, type Actor, type TabId } from '../lib/roles';
+import { useT } from '../i18n';
+import { isSessionRole, type Actor, type TabId } from '../lib/roles';
 import type { EvaluatedStep } from '../scenarios/types';
 import { useApp, useDemoState, useFocus } from '../state';
 
 export function RoleBadge({ actor }: { actor: Actor }) {
-  return <span className={`role-badge role-${actor}`}>{ROLE_LABEL[actor]}</span>;
+  const m = useT();
+  return <span className={`role-badge role-${actor}`}>{m.roles.label[actor]}</span>;
 }
-
-const MARK: Record<EvaluatedStep['state'], string> = { done: '✓', current: '▶', pending: '・' };
 
 /**
  * The scenario's steps: which role does what next, and why. Test ids (apps/demo/TESTIDS.md): `guide`
@@ -14,6 +14,7 @@ const MARK: Record<EvaluatedStep['state'], string> = { done: '✓', current: '�
  * data-action, data-tab, data-confirm) and its button `guide-go`.
  */
 export function Guide() {
+  const m = useT();
   const { guide, run } = useDemoState();
   return (
     <aside className="guide" data-testid="guide" data-scenario={guide.scenario.id} data-run={run.id} data-complete={guide.complete ? 'true' : 'false'}>
@@ -23,7 +24,7 @@ export function Guide() {
         {guide.steps.map((s) => (
           <li key={s.step.id} className={`step ${s.state}`} data-testid={`guide-step-${s.step.id}`} data-state={s.state}>
             <div className="step-head">
-              <span className="mark" aria-hidden>{MARK[s.state]}</span>
+              <span className="mark" aria-hidden>{m.guide.mark[s.state]}</span>
               <RoleBadge actor={s.step.actor} />
               <span className="step-title">{s.step.title}</span>
             </div>
@@ -33,7 +34,7 @@ export function Guide() {
       </ol>
       {guide.complete && (
         <p className="banner ok" data-testid="guide-complete">
-          このシナリオは最後まで進みました。上の「シナリオ」から別のシナリオを選ぶか、「最初から」でもう一度たどれます。
+          {m.guide.complete}
         </p>
       )}
     </aside>
@@ -42,7 +43,9 @@ export function Guide() {
 
 function CurrentStep({ s }: { s: EvaluatedStep }) {
   const app = useApp();
+  const m = useT();
   const { running } = useDemoState();
+  const role = (r: Actor) => m.roles.label[r];
   const { go } = useFocus();
   const a = s.action;
   const tab: TabId | undefined = a ? a.tab ?? (s.step.actor === 'chain' ? undefined : s.step.actor) : undefined;
@@ -62,15 +65,15 @@ function CurrentStep({ s }: { s: EvaluatedStep }) {
       {s.progress && <p className="progress" data-testid="guide-progress">{s.progress}</p>}
       {a && here && (
         <button type="button" className="primary" data-testid="guide-go" onClick={() => go(tab!, a.testid)}>
-          この操作へ（{ROLE_LABEL[tab!]}）
+          {m.guide.go(role(tab!))}
         </button>
       )}
       {a && !here && (
         <p className="banner warn" data-testid="guide-elsewhere">
-          別のウィンドウで {ROLE_LABEL[tab!]} が操作します（このウィンドウでは {app.localRoles.map((r) => ROLE_LABEL[r]).join('・') || 'どの役割も'} だけが動いています）。
+          {m.guide.elsewhere(role(tab!), app.localRoles.map(role).join(m.common.listSep) || m.guide.anyRole)}
         </p>
       )}
-      {!a && <p className="muted" data-testid="guide-waiting">待っています…（自動で進みます）</p>}
+      {!a && <p className="muted" data-testid="guide-waiting">{m.guide.waiting}</p>}
     </div>
   );
 }

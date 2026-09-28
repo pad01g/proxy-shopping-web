@@ -1,4 +1,5 @@
 import { normalizeRelayUrl, type TimelockPolicy } from '@proxy-shopping/core/browser';
+import { msg } from '../i18n';
 
 /**
  * /demo-config.json, served by the demo server (proxy-shopping-go/lab/demo/demo-config.json).
@@ -52,7 +53,7 @@ export async function loadConfig(): Promise<ResolvedConfig> {
 export function resolveConfig(c: DemoConfig, loc: Pick<Location, 'origin' | 'host' | 'protocol'>): ResolvedConfig {
   const missing = (['network', 'relays', 'relay_paths', 'esplora', 'evm_rpc', 'faucet', 'deployments', 'coordinator_mnemonic', 'shoppers'] as const)
     .filter((k) => c[k] === undefined || c[k] === '');
-  if (missing.length) throw new Error(`demo-config.json に ${missing.join(', ')} がありません`);
+  if (missing.length) throw new Error(msg().app.configMissing(missing.join(', ')));
   const http = (p: string) => new URL(p, loc.origin).toString().replace(/\/+$/, '');
   const wsScheme = loc.protocol === 'https:' ? 'wss' : 'ws';
   const physicalRelays = new Map<string, string>();

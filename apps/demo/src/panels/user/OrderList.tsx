@@ -1,13 +1,15 @@
 import { Section } from '../../components/ui';
-import { formatTime, PAYMENT_LABEL, STATUS_LABEL } from '../../lib/format';
+import { label, useT } from '../../i18n';
+import { formatTime, PAYMENT_LABEL } from '../../lib/format';
 import { useLive, useRuntime } from '../../state';
 
 export function OrderList({ selected, onSelect }: { selected?: string; onSelect: (id: string) => void }) {
   const rt = useRuntime('user');
+  const m = useT();
   const [orders] = useLive(() => rt.client.listOrders(), (cb) => rt.client.on('order', cb), [rt]);
   if (!orders?.length) return null;
   return (
-    <Section title="注文の一覧" testid="order-list">
+    <Section title={m.user.orders} testid="order-list">
       <table>
         <tbody>
           {orders.slice(0, 12).map((o) => (
@@ -16,7 +18,7 @@ export function OrderList({ selected, onSelect }: { selected?: string; onSelect:
               <td>{formatTime(o.createdAt)}</td>
               <td>{o.request.shop_url.replace(/^https?:\/\//, '')} {o.request.items.map((i) => i.sku).join(', ')}</td>
               <td>{PAYMENT_LABEL[o.payment]}</td>
-              <td><span className="badge">{STATUS_LABEL[o.status] ?? o.status}</span></td>
+              <td><span className="badge">{label(m.format.status, o.status)}</span></td>
             </tr>
           ))}
         </tbody>

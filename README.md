@@ -37,7 +37,10 @@ The integrated demo for the docker compose lab (`../proxy-shopping-go`, compose 
 usage in `../proxy-shopping-go/docs/lab.md`「デモ画面」). User, escrow, operator and coordinator each have their own key
 (localStorage, lab only) and their own `Session` + client in the page; the shopper is the lab's Go node. A guide walks
 through seven scenarios (normal BTC / USDC, dispute refund, sold out, risky shop, fraudulent escrow, T2 refund);
-`?role=user` / `?role=escrow,operator,coordinator` runs only those roles in a window. Protocol logic is core's
+`?role=user` / `?role=escrow,operator,coordinator` runs only those roles in a window. The page is in Japanese or English
+(header switch 日本語 / English, kept in localStorage; `?lang=en|ja` overrides it): one message catalog per language in
+`apps/demo/src/i18n` (`ja.ts` defines the keys, `en.ts` must match them), core's timeline lines are rendered from their kind.
+Protocol logic is core's
 (`UserClient`, `EscrowClient`, `OperatorClient`, `CoordinatorClient`); the page wires them over core's `MappedTransport` (logical relay
 URLs such as `wss://relay-1.test` stay protocol-visible, the connection goes to the demo server's `/relay-1`).
 

@@ -1,6 +1,7 @@
 import {
   OperatorClient, type IndexedDBStorage, type ListEntry, type OperatorList, type OperatorListContent, type Session,
 } from '@proxy-shopping/core/browser';
+import { msg } from '../../i18n';
 import type { OperatorSnap } from '../snapshots';
 import { createSession, RoleRuntime, type RuntimeDeps } from './base';
 
@@ -49,7 +50,7 @@ export class OperatorRuntime extends RoleRuntime<'operator'> {
 
   /** The list this demo starts from: our current one with the demo combinations added. */
   async demoContent(shopper: string, escrow: string): Promise<OperatorListContent> {
-    const cur = (await this.currentList())?.content ?? (await this.client.draft('デモの operator'));
+    const cur = (await this.currentList())?.content ?? (await this.client.draft(msg().operator.draftName));
     const d = this.deps.deployments;
     const ep = this.deps.config.list_endpoints;
     const key = (e: ListEntry) => `${e.region}|${e.shopper}|${e.escrow}`;

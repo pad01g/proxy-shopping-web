@@ -1,12 +1,14 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
+import { initLang, msg } from './i18n';
 import { DemoApp } from './lib/app';
 import { DemoProvider } from './state';
 import './styles.css';
 
+initLang();
 const root = createRoot(document.getElementById('root')!);
-root.render(<p className="center muted" data-testid="demo-loading">デモを準備しています…（鍵の生成と lab への接続）</p>);
+root.render(<p className="center muted" data-testid="demo-loading">{msg().app.loading}</p>);
 
 DemoApp.create().then(
   (app) => {
@@ -20,11 +22,12 @@ DemoApp.create().then(
   },
   (err: Error) => {
     console.error(err);
+    const m = msg();
     root.render(
       <div className="center" data-testid="demo-error">
-        <h1>デモを始められませんでした</h1>
+        <h1>{m.app.startFailed}</h1>
         <p className="error">{err.message}</p>
-        <p className="muted">docker compose の lab（proxy-shopping-go で <code>docker compose up -d --build</code>）が動いているか確かめてください。</p>
+        <p className="muted">{m.app.startFailedBefore}<code>docker compose up -d --build</code>{m.app.startFailedAfter}</p>
       </div>,
     );
   },

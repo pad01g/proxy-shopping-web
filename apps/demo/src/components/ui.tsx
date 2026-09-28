@@ -1,4 +1,5 @@
 import { Component, useState, type ErrorInfo, type ReactNode } from 'react';
+import { msg, useT } from '../i18n';
 
 export function Section({ title, children, testid, note }: { title: string; children: ReactNode; testid?: string; note?: ReactNode }) {
   return (
@@ -28,10 +29,11 @@ export function Mono({ children, testid, title }: { children: ReactNode; testid?
 }
 
 export function Copyable({ value, testid, display }: { value: string; testid?: string; display?: string }) {
+  const m = useT();
   return (
     <span className="copyable">
       <Mono testid={testid} title={value}>{display ?? value}</Mono>
-      <button type="button" className="plain small" onClick={() => void navigator.clipboard?.writeText(value)}>コピー</button>
+      <button type="button" className="plain small" onClick={() => void navigator.clipboard?.writeText(value)}>{m.common.copy}</button>
     </span>
   );
 }
@@ -54,19 +56,20 @@ export interface ConfirmSpec {
  * button's testid), confirm-amount, confirm-recipient, confirm-warning, confirm-ok, confirm-cancel.
  */
 export function ConfirmDialog(p: { spec: ConfirmSpec; action: string; onOk: () => void; onCancel: () => void }) {
+  const m = useT();
   return (
     <div className="modal-backdrop" role="presentation">
       <div className="modal card" role="dialog" aria-modal="true" aria-labelledby="confirm-title" data-testid="confirm-dialog" data-action={p.action}>
         <h2 id="confirm-title">{p.spec.title}</h2>
-        {p.spec.amount && <p>額: <strong data-testid="confirm-amount">{p.spec.amount}</strong></p>}
-        {p.spec.recipient && <p>宛先: <code className="mono" data-testid="confirm-recipient">{p.spec.recipient}</code></p>}
+        {p.spec.amount && <p>{m.common.amount}<strong data-testid="confirm-amount">{p.spec.amount}</strong></p>}
+        {p.spec.recipient && <p>{m.common.recipient}<code className="mono" data-testid="confirm-recipient">{p.spec.recipient}</code></p>}
         {p.spec.details}
         {p.spec.warning && <p className="banner strong" data-testid="confirm-warning">{p.spec.warning}</p>}
         <div className="row">
           <button type="button" className={p.spec.warning ? 'danger' : 'primary'} data-testid="confirm-ok" onClick={p.onOk}>
-            {p.spec.okLabel ?? '実行する'}
+            {p.spec.okLabel ?? m.common.ok}
           </button>
-          <button type="button" data-testid="confirm-cancel" onClick={p.onCancel}>やめる</button>
+          <button type="button" data-testid="confirm-cancel" onClick={p.onCancel}>{m.common.cancel}</button>
         </div>
       </div>
     </div>
@@ -88,6 +91,7 @@ export function ActionButton(props: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [asking, setAsking] = useState<ConfirmSpec>();
+  const m = useT();
   const run = async () => {
     setBusy(true);
     setError(undefined);
@@ -117,7 +121,7 @@ export function ActionButton(props: {
         data-busy={busy ? 'true' : 'false'}
         onClick={() => void click()}
       >
-        {busy ? '処理中…' : props.children}
+        {busy ? m.common.busy : props.children}
       </button>
       <ErrorText error={error} testid={`${props.testid}-error`} />
       {asking && (
@@ -151,7 +155,7 @@ export class ErrorBoundary extends Component<{ name: string; children: ReactNode
     if (this.state.error) {
       return (
         <section className="card banner error" data-testid="panel-error" data-panel={this.props.name}>
-          この欄を表示できませんでした（{this.props.name}）: {this.state.error.message}
+          {msg().app.panelError(this.props.name, this.state.error.message)}
         </section>
       );
     }

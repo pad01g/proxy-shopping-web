@@ -1,4 +1,5 @@
 import { deploymentsSchema, type Deployments } from '@proxy-shopping/core/browser';
+import { msg, onLangChange } from '../i18n';
 import { DEFAULT_SCENARIO, scenarioById } from '../scenarios';
 import { buildCtx, evaluate } from '../scenarios/evaluate';
 import type { GuideState } from '../scenarios/types';
@@ -35,7 +36,7 @@ export interface DemoState {
   /** Session roles running in this window. */
   running: SessionRole[];
   problems: Partial<Record<SessionRole, RoleProblem>>;
-  /** Another window started "デモを初期化". */
+  /** Another window started "reset demo". */
   resetting: boolean;
   /** The user's order the scenario follows, once there is one. */
   scenarioOrderId?: string;
@@ -64,6 +65,7 @@ export class DemoApp {
   private constructor(
     readonly config: ResolvedConfig,
     readonly deployments: Deployments | undefined,
+    /** Why the deployments could not be read (the page words it in its language). */
     readonly deploymentsError: string | undefined,
     readonly keyRing: KeyRing,
     readonly ids: Identities,
@@ -79,7 +81,7 @@ export class DemoApp {
 
   static async create(): Promise<DemoApp> {
     const config = await loadConfig();
-    if (!config.shoppers.length) throw new Error('demo-config.json に shoppers がありません');
+    if (!config.shoppers.length) throw new Error(msg().app.noShoppers);
     let deployments: Deployments | undefined;
     let deploymentsError: string | undefined;
     try {
@@ -87,7 +89,7 @@ export class DemoApp {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       deployments = deploymentsSchema(await res.json(), 'deployments');
     } catch (err) {
-      deploymentsError = `EVM のコントラクトの一覧（${config.deployments}）を読めません: ${(err as Error).message}`;
+      deploymentsError = (err as Error).message;
     }
     const keyRing = new KeyRing(config.coordinator_mnemonic);
     const { roles, separate } = rolesFromQuery(window.location.search);
@@ -112,6 +114,8 @@ export class DemoApp {
   // ---------- lifecycle ----------
 
   private async start(): Promise<void> {
+    // The guide's texts (scenario steps, progress) are in the page's language.
+    onLangChange(() => this.queue());
     onSnapshotChange(() => {
       this.snapshots = readSnapshots();
       this.queue();

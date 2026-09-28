@@ -1,7 +1,8 @@
 /**
- * Browser storage of the demo. Everything lives under one prefix so "デモを初期化" can wipe it:
+ * Browser storage of the demo. Everything lives under one prefix so "reset demo" (デモを初期化) can wipe it:
  * localStorage keys `ps-demo.*` and one IndexedDB database per role (`ps-demo-<role>`).
  */
+import { msg } from '../i18n';
 import type { SessionRole } from './roles';
 
 export const LS_PREFIX = 'ps-demo.';
@@ -42,7 +43,7 @@ export function clearLocalStorage(): void {
 export function deleteDatabase(name: string, ms = 10_000): Promise<void> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.deleteDatabase(name);
-    const timer = setTimeout(() => reject(new Error(`データベース ${name} を消せません（別のウィンドウが開いたままです）`)), ms);
+    const timer = setTimeout(() => reject(new Error(msg().app.dbBusy(name))), ms);
     req.onsuccess = () => {
       clearTimeout(timer);
       resolve();

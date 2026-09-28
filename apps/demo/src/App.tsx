@@ -2,7 +2,8 @@ import { useEffect, type ReactNode } from 'react';
 import { Guide } from './components/Guide';
 import { Header } from './components/Header';
 import { ActionButton, ErrorBoundary } from './components/ui';
-import { isSessionRole, ROLE_ABOUT, ROLE_LABEL, TABS, type SessionRole, type TabId } from './lib/roles';
+import { useT } from './i18n';
+import { isSessionRole, TABS, type SessionRole, type TabId } from './lib/roles';
 import { CoordinatorPanel } from './panels/coordinator/CoordinatorPanel';
 import { EscrowPanel } from './panels/escrow/EscrowPanel';
 import { LabPanel } from './panels/lab/LabPanel';
@@ -22,6 +23,7 @@ const PANELS: Record<TabId, () => ReactNode> = {
 
 export function App() {
   const app = useApp();
+  const m = useT();
   const { resetting, guide } = useDemoState();
   const { tab, go } = useFocus();
   // Session roles of other windows have no tab here; the shopper node and the lab are in every window.
@@ -32,8 +34,10 @@ export function App() {
   return (
     <div className="layout">
       <Header />
-      {resetting && <p className="banner warn center" data-testid="resetting">デモを初期化しています…（終わると再読み込みします）</p>}
-      {app.deploymentsError && <p className="banner error" data-testid="deployments-error">{app.deploymentsError}（USDC の注文はできません）</p>}
+      {resetting && <p className="banner warn center" data-testid="resetting">{m.app.resetting}</p>}
+      {app.deploymentsError && (
+        <p className="banner error" data-testid="deployments-error">{m.app.deploymentsError(app.config.deployments, app.deploymentsError)}</p>
+      )}
       <div className="columns">
         <Guide />
         <main>
@@ -49,12 +53,12 @@ export function App() {
                 data-active={t === tab ? 'true' : 'false'}
                 onClick={() => go(t)}
               >
-                {ROLE_LABEL[t]}
-                {t === next && <span className="next-dot" title="ガイドの次の操作はこのタブです">●</span>}
+                {m.roles.label[t]}
+                {t === next && <span className="next-dot" title={m.app.nextTab}>●</span>}
               </button>
             ))}
           </nav>
-          <p className="role-about" data-testid="role-about">{ROLE_ABOUT[tab]}</p>
+          <p className="role-about" data-testid="role-about">{m.roles.about[tab]}</p>
           <ErrorBoundary key={tab} name={tab}>
             {isSessionRole(tab) ? <RoleGate role={tab}>{PANELS[tab]()}</RoleGate> : PANELS[tab]()}
           </ErrorBoundary>
@@ -67,24 +71,26 @@ export function App() {
 /** A session role's panel, once its runtime runs in this window. */
 function RoleGate({ role, children }: { role: SessionRole; children: ReactNode }) {
   const app = useApp();
+  const m = useT();
   const { running, problems } = useDemoState();
+  const name = m.roles.label[role];
   if (running.includes(role)) return <>{children}</>;
   const p = problems[role];
   if (p?.kind === 'elsewhere') {
     return (
       <div className="banner warn" data-testid={`role-elsewhere-${role}`}>
-        {ROLE_LABEL[role]} は、このブラウザの別のウィンドウ（タブ）で動いています。同じ役割を 2 か所で動かすと、同じメッセージに二重に応えてしまうので、ここでは動かしません。
+        {m.app.roleElsewhere(name)}
         <div className="row">
-          <ActionButton testid={`role-takeover-${role}`} kind="plain" onClick={() => app.startRole(role, true)}>このウィンドウで動かす</ActionButton>
+          <ActionButton testid={`role-takeover-${role}`} kind="plain" onClick={() => app.startRole(role, true)}>{m.app.takeover}</ActionButton>
         </div>
       </div>
     );
   }
-  if (p?.kind === 'error') return <p className="banner error" data-testid={`role-error-${role}`}>{ROLE_LABEL[role]} を起動できませんでした: {p.message}</p>;
-  return <p className="muted" data-testid={`role-starting-${role}`}>{ROLE_LABEL[role]} を起動しています…</p>;
+  if (p?.kind === 'error') return <p className="banner error" data-testid={`role-error-${role}`}>{m.app.roleError(name, p.message)}</p>;
+  return <p className="muted" data-testid={`role-starting-${role}`}>{m.app.roleStarting(name)}</p>;
 }
 
-/** After "この操作へ": scroll the control into view and flash it (it may render a moment later). */
+/** After the guide's "go to this action": scroll the control into view and flash it (it may render a moment later). */
 function useHighlight() {
   const { highlight } = useFocus();
   useEffect(() => {

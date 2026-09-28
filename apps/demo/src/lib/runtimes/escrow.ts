@@ -1,13 +1,18 @@
 import { EscrowClient, type Address, type EscrowProfileContent, type IndexedDBStorage, type Session } from '@proxy-shopping/core/browser';
+import { msg } from '../../i18n';
 import type { EscrowSnap } from '../snapshots';
 import { createSession, RoleRuntime, type RuntimeDeps } from './base';
 
-/** The terms the demo escrow publishes (the same as the lab's Go escrows, docs/lab.md). */
-export const DEMO_ESCROW_TERMS: Pick<EscrowProfileContent, 'name' | 'upfront_fee' | 'dispute_fee_bps'> = {
-  name: 'デモの escrow',
+type Terms = Pick<EscrowProfileContent, 'name' | 'upfront_fee' | 'dispute_fee_bps'>;
+
+/** The fee terms the demo escrow publishes (the same as the lab's Go escrows, docs/lab.md). */
+export const DEMO_ESCROW_FEES: Omit<Terms, 'name'> = {
   upfront_fee: { bps: 50, min_sats: '1000', min_usdc: '0.50' },
   dispute_fee_bps: 200,
 };
+
+/** The demo escrow's terms, named in the page's language. */
+export const demoEscrowTerms = (): Terms => ({ name: msg().escrow.defaultName, ...DEMO_ESCROW_FEES });
 
 const DECRYPTED = 'demo/decrypted/';
 
@@ -32,7 +37,7 @@ export class EscrowRuntime extends RoleRuntime<'escrow'> {
     void this.session.publishInboxRelays().catch((e) => console.warn('escrow: publishing 10050 failed', e));
   }
 
-  async publishProfile(terms = DEMO_ESCROW_TERMS) {
+  async publishProfile(terms: Terms = demoEscrowTerms()) {
     const res = await this.client.publishProfile(terms);
     this.changed();
     return res;

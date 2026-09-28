@@ -34,6 +34,7 @@ header.top {
 }
 .brand { display: flex; flex-direction: column; margin-right: auto; }
 .scenario-picker select { min-width: 280px; }
+.lang-switch { display: flex; align-items: center; white-space: nowrap; }
 .columns { display: grid; grid-template-columns: minmax(300px, 380px) 1fr; gap: 16px; padding: 16px 20px; align-items: start; }
 @media (max-width: 900px) { .columns { grid-template-columns: 1fr; } }
 main { min-width: 0; }
