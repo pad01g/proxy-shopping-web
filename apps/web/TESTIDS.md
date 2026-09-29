@@ -93,7 +93,8 @@ A panel that fails to render is replaced by `panel-error` (`data-panel` = panel 
 | testid | element |
 |---|---|
 | `settings` | page |
-| `settings-relays`, `settings-coordinators` | editable lists (see "lists" below) |
+| `settings-relays`, `settings-coordinators`, `settings-trust-bundles` | editable lists (see "lists" below); trust bundles are URLs of signed events (config `trust_bundles`) |
+| `settings-directory` (`data-url`) | coordinator directory of config.json `coordinator_directory`; rows `settings-directory-item` (`data-pk`, `data-added`), add button `settings-directory-add-<name>` (also adds its `bundle` to the trust bundles), `settings-directory-empty`, `settings-directory-error` |
 | `settings-network`, `settings-esplora`, `settings-evm-rpc`, `settings-chain-id`, `settings-deployments-url`, `settings-faucet-url` | inputs |
 | `settings-rates` | rate sources table; rows `settings-rates-item`, remove `settings-rates-remove-<i>` |
 | `settings-rates-type`, `settings-rates-base`, `settings-rates-add` | add a rate source (`static` takes JSON in base) |
@@ -104,6 +105,7 @@ A panel that fails to render is replaced by `panel-error` (`data-panel` = panel 
 | `settings-endpoint-warning` | an endpoint (relays, esplora, evm_rpc, deployments_url, rates, faucet, chain id) differs from config.json |
 | `settings-error` | validation error (coordinator keys; endpoints must be https/wss unless `allow_private_endpoints` in config.json) |
 | `settings-key` | key section (shown even when the runtime failed) |
+| `settings-pubkey` | the identity's Nostr public key (hex), when connected |
 | `settings-mnemonic-passphrase`, `settings-show-mnemonic`, `settings-mnemonic-words`, `settings-key-error` | re-show the mnemonic (asks the passphrase again) |
 | `settings-export-orders` | download orders and escrow cases as JSON |
 | `settings-logout-delete-data`, `settings-logout` | delete the key (confirm dialog); optionally also this identity's database |

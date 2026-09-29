@@ -12,6 +12,13 @@ export interface AppConfig {
   network: string;
   relays: string[];
   coordinators: string[];
+  /**
+   * Trust bundles: URLs of signed trust events (e.g. https://pad01g.github.io/proxy-shopping-registry/events.json).
+   * Every event is verified like a relay's; a bundle only delivers events when relays do not.
+   */
+  trust_bundles?: string[];
+  /** URL of a coordinator directory (a registry's coordinators.json); Settings offers its coordinators to add. */
+  coordinator_directory?: string;
   esplora: string;
   evm_rpc: string;
   chain_id: number;
@@ -55,9 +62,12 @@ export async function loadBaseConfig(): Promise<AppConfig> {
   }
 }
 
-/** Settings may only override these; the lab flag, the timelock policy and the clock skew come from config.json alone. */
+/**
+ * Settings may only override these; the lab flag, the timelock policy, the clock skew and the coordinator directory
+ * come from config.json alone.
+ */
 export const OVERRIDABLE: ReadonlyArray<keyof AppConfig> = [
-  'network', 'relays', 'coordinators', 'esplora', 'evm_rpc', 'chain_id', 'deployments_url', 'rates', 'faucet_url', 'max_fee_rate',
+  'network', 'relays', 'coordinators', 'trust_bundles', 'esplora', 'evm_rpc', 'chain_id', 'deployments_url', 'rates', 'faucet_url', 'max_fee_rate',
 ];
 
 export function loadOverrides(): Partial<AppConfig> {
@@ -94,6 +104,9 @@ export function configProblems(c: AppConfig, allowPrivate = !!c.allow_private_en
     if (p) out.push(`${label}: ${p}`);
   };
   c.relays.forEach((r) => check('relay', r, 'ws'));
+  (c.trust_bundles ?? []).forEach((b) => check('trust bundle', b, 'http'));
+  // the directory may be same-origin (relative), like deployments_url
+  if (c.coordinator_directory && /^[a-z]+:/i.test(c.coordinator_directory)) check('coordinator_directory', c.coordinator_directory, 'http');
   check('esplora', c.esplora, 'http');
   check('evm_rpc', c.evm_rpc, 'http');
   check('faucet_url', c.faucet_url, 'http');
@@ -104,4 +117,32 @@ export function configProblems(c: AppConfig, allowPrivate = !!c.allow_private_en
 }
 
 /** Endpoint fields whose value differs from config.json — the user is warned before saving. */
-export const ENDPOINT_FIELDS: ReadonlyArray<keyof AppConfig> = ['relays', 'esplora', 'evm_rpc', 'deployments_url', 'rates', 'faucet_url', 'chain_id'];
+export const ENDPOINT_FIELDS: ReadonlyArray<keyof AppConfig> = ['relays', 'trust_bundles', 'esplora', 'evm_rpc', 'deployments_url', 'rates', 'faucet_url', 'chain_id'];
+
+/** One coordinator of a directory (coordinators.json of pad01g/proxy-shopping-registry). */
+export interface DirectoryCoordinator {
+  name: string;
+  pk: string;
+  contact: string;
+  description: string;
+  url?: string;
+  bundle?: string;
+}
+
+const str = (v: unknown, max: number): v is string => typeof v === 'string' && v.length > 0 && v.length <= max;
+
+/** The well-formed entries of a coordinator directory ({"coordinators": [...]}); malformed ones are dropped. */
+export function parseCoordinatorDirectory(body: unknown): DirectoryCoordinator[] {
+  const list = (body as { coordinators?: unknown })?.coordinators;
+  if (!Array.isArray(list)) return [];
+  const out: DirectoryCoordinator[] = [];
+  for (const c of list.slice(0, 200) as Array<Record<string, unknown>>) {
+    if (!c || typeof c.pk !== 'string' || !/^[0-9a-f]{64}$/.test(c.pk) || !str(c.name, 40) || !str(c.contact, 200) || !str(c.description, 300)) continue;
+    out.push({
+      name: c.name, pk: c.pk, contact: c.contact, description: c.description,
+      ...(str(c.url, 256) && /^https:\/\//.test(c.url) ? { url: c.url } : {}),
+      ...(str(c.bundle, 256) && /^https:\/\//.test(c.bundle) ? { bundle: c.bundle } : {}),
+    });
+  }
+  return out;
+}

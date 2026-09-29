@@ -36,7 +36,7 @@ export * from './trust/versions.js';
 export * from './trust/events.js';
 export * from './trust/effective.js';
 export { shopperProfileContent, escrowProfileContent, operatorListContent } from './trust/schema.js';
-export { TrustDirectory, type Offer, type DirectorySnapshot } from './trust/directory.js';
+export { TrustDirectory, bundleEvents, type Offer, type DirectorySnapshot } from './trust/directory.js';
 
 // fx
 export * from './fx/types.js';

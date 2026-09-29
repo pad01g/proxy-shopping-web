@@ -2,7 +2,7 @@ import { finalizeEvent, generateSecretKey, getPublicKey, type NostrEvent } from 
 import { describe, expect, it } from 'vitest';
 import { MemoryStorage } from '../storage/memory.js';
 import { MemoryRelayNetwork } from '../testing/memory-transport.js';
-import { TrustDirectory } from './directory.js';
+import { bundleEvents, TrustDirectory } from './directory.js';
 import { effectiveCombinations, matchingEntries } from './effective.js';
 import { delegationTemplate, operatorListTemplate, parseOperatorList, shopperProfileTemplate } from './events.js';
 import { covers, shopAllowed } from './region.js';
@@ -148,6 +148,46 @@ describe('TrustDirectory', () => {
     expect(snap.entries.map((e) => e.shopper)).toEqual([good.pk, bad.pk]);
     expect(snap.shoppers.get(good.pk)?.content).toMatchObject({ name: 'ok', payments: ['btc-signet'], currencies: [] });
     expect(snap.shoppers.has(bad.pk)).toBe(false);
+  });
+
+  it('imports trust bundles (a registry events.json) without relays, verified and scoped like relay events', async () => {
+    const net = new MemoryRelayNetwork();
+    const t = net.transport();
+    const relays = ['wss://relay-1.test'];
+    const c = key();
+    const stranger = key();
+    const op = key();
+    const op2 = key();
+    const shopper = key();
+    const del = finalizeEvent(delegationTemplate({ operator: op.pk, version: 3, network: NET }), c.sk);
+    const lst = finalizeEvent(operatorListTemplate(list([{ shopper: shopper.pk }]), 3), op.sk);
+    const profile = finalizeEvent(shopperProfileTemplate({
+      name: 'bundled', payments: ['btc-signet'], currencies: ['JPY'], cash_regions: [], fee: { bps: 500 }, delivery_days: 5,
+    }, NET, 1), shopper.sk);
+    // not reachable from the configured coordinator, or not genuine: must not count or be cached
+    const foreignDel = finalizeEvent(delegationTemplate({ operator: op2.pk, version: 9, network: NET }), stranger.sk);
+    const foreignList = finalizeEvent(operatorListTemplate(list([{ shopper: pk('b') }]), 9), op2.sk);
+    const forged = { ...finalizeEvent(delegationTemplate({ operator: op2.pk, version: 10, network: NET }), c.sk), content: '{"note":"x"}' };
+    const files: Record<string, unknown> = {
+      'https://registry.test/events.json': { network: NET, version: 3, events: [lst, del, foreignDel, foreignList, forged] },
+      'https://other.test/profiles.json': [profile],
+    };
+    const fetchStub = (async (url: string) =>
+      url in files ? new Response(JSON.stringify(files[url]), { status: 200 }) : new Response('no', { status: 404 })) as unknown as typeof fetch;
+    const storage = new MemoryStorage();
+    const bundles = ['https://registry.test/events.json', 'https://other.test/profiles.json', 'https://down.test/events.json'];
+    const dir = new TrustDirectory({ transport: t, storage, network: NET, relays: () => relays, coordinators: () => [c.pk], bundles: () => bundles, fetch: fetchStub });
+    const snap = await dir.refresh();
+    expect(snap.entries.map((e) => [e.shopper, e.provenance.operator, e.provenance.listVersion])).toEqual([[shopper.pk, op.pk, 3]]);
+    expect(snap.shoppers.get(shopper.pk)?.content.name).toBe('bundled');
+    expect(snap.delegations.map((d) => d.operator)).toEqual([op.pk]);
+    const cached = (await storage.get<NostrEvent[]>('trust/events')) ?? [];
+    expect(cached.map((e) => e.id).sort()).toEqual([del.id, lst.id, profile.id].sort());
+    // relays still count: a newer revocation there wins over the bundle's delegation
+    await t.publish(relays, finalizeEvent(delegationTemplate({ operator: op.pk, version: 4, network: NET, revoked: true }), c.sk));
+    expect((await dir.refresh()).entries).toHaveLength(0);
+    expect(bundleEvents({ nope: 1 })).toEqual([]);
+    expect(bundleEvents([forged, del])).toEqual([del]);
   });
 
   it('requires the list content network to equal d', () => {

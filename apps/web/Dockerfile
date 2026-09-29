@@ -4,6 +4,7 @@ FROM node:22-bookworm AS build
 WORKDIR /src
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/core/package.json packages/core/
+COPY packages/mcp/package.json packages/mcp/
 COPY apps/web/package.json apps/web/
 COPY apps/demo/package.json apps/demo/
 RUN npm ci --no-audit --no-fund

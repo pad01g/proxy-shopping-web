@@ -22,13 +22,18 @@ jobs:
         with:
           repository: pad01g/proxy-shopping-go
           path: proxy-shopping-go
+      # the MCP tests run the registry's own validator on the entries registry_entry writes
+      - uses: actions/checkout@v5
+        with:
+          repository: pad01g/proxy-shopping-registry
+          path: proxy-shopping-registry
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
       - run: npm ci
       - run: npm run typecheck
       - name: Unit tests (with the Go repo's cross-implementation vectors)
-        run: ln -s "$PWD/proxy-shopping-go" ../proxy-shopping-go && npm test
+        run: ln -s "$PWD/proxy-shopping-go" ../proxy-shopping-go && ln -s "$PWD/proxy-shopping-registry" ../proxy-shopping-registry && npm ci --prefix proxy-shopping-registry && npm test
       - run: npm run build
 
   images:

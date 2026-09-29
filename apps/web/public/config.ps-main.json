@@ -1,0 +1,29 @@
+{
+  "network": "ps-main",
+  "relays": [
+    "wss://relay.damus.io",
+    "wss://nos.lol",
+    "wss://relay.primal.net"
+  ],
+  "coordinators": [
+    "7a0a27bb7092dc59b5bfe195d9f0e0cf81c69373b0d702a41490ed45cfccbe39"
+  ],
+  "trust_bundles": [
+    "https://pad01g.github.io/proxy-shopping-registry/events.json"
+  ],
+  "coordinator_directory": "https://pad01g.github.io/proxy-shopping-registry/coordinators.json",
+  "esplora": "https://mempool.space/signet/api",
+  "evm_rpc": "",
+  "chain_id": 0,
+  "deployments_url": "",
+  "rates": [
+    {
+      "type": "coingecko",
+      "base": "https://api.coingecko.com"
+    },
+    {
+      "type": "frankfurter",
+      "base": "https://api.frankfurter.app"
+    }
+  ]
+}

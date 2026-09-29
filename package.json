@@ -7,10 +7,10 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "npm run build -w @proxy-shopping/core && npm run build -w @proxy-shopping/web && npm run build -w @proxy-shopping/demo",
-    "test": "npm test -w @proxy-shopping/core",
+    "build": "npm run build -w @proxy-shopping/core && npm run build -w @proxy-shopping/mcp && npm run build -w @proxy-shopping/web && npm run build -w @proxy-shopping/demo",
+    "test": "npm test -w @proxy-shopping/core && npm test -w @proxy-shopping/mcp",
     "test:integration": "npm run test:integration -w @proxy-shopping/core",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run build -w @proxy-shopping/core && npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {
     "typescript": "~5.9.3"

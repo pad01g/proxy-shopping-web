@@ -19,6 +19,11 @@ export interface SessionConfig {
   relays: string[];
   /** Trusted coordinators, highest priority first (§2.4). */
   coordinators: string[];
+  /**
+   * Trust bundle URLs (e.g. a registry's events.json): signed events fetched on every directory refresh and
+   * verified and scoped like the relays' answers, so the directory works when relays have dropped them.
+   */
+  trustBundles?: string[];
   /** Minimum relays per message (§4.2). */
   k?: number;
   retryIntervalMs?: number;
@@ -89,6 +94,7 @@ export class Session {
       network: this.cfg.network,
       relays: () => this.cfg.relays,
       coordinators: () => this.cfg.coordinators,
+      bundles: () => this.cfg.trustBundles ?? [],
     });
   }
 

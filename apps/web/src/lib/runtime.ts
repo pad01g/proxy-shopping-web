@@ -80,7 +80,7 @@ export async function createRuntime(config: AppConfig, identity: Identity): Prom
     transport: new PoolTransport(),
     storage,
     config: {
-      network: config.network, relays: config.relays, coordinators: config.coordinators,
+      network: config.network, relays: config.relays, coordinators: config.coordinators, trustBundles: config.trust_bundles,
       timelockPolicy: config.timelock_policy, allowPrivateEndpoints: !!config.allow_private_endpoints, maxFeeRate: config.max_fee_rate,
       maxClockSkewSeconds: config.max_clock_skew_seconds,
     },

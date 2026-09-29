@@ -1,0 +1,34 @@
+{
+  "name": "@proxy-shopping/mcp",
+  "version": "0.1.0",
+  "description": "MCP server for the proxy-shopping P2P network: buy from cash-only or unsupported shops with crypto through a proxy shopper, with a 2-of-3 escrow; or earn as a proxy shopper",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "proxy-shopping-mcp": "./dist/server.js"
+  },
+  "main": "./dist/server.js",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --dir test",
+    "test:lab": "npm run build && PS_LAB_INTEGRATION=1 vitest run --dir test lab"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.1",
+    "@proxy-shopping/core": "0.1.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "~5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

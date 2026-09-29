@@ -1,7 +1,9 @@
 import { decryptWithPassphrase } from '@proxy-shopping/core/browser';
 import { useEffect, useState } from 'react';
 import { ConfirmDialog, ErrorText, Field, Section, StringList } from '../components/ui';
-import { configProblems, ENDPOINT_FIELDS, overriddenFields, type AppConfig, type RateSourceConfig } from '../lib/config';
+import {
+  configProblems, ENDPOINT_FIELDS, overriddenFields, parseCoordinatorDirectory, type AppConfig, type DirectoryCoordinator, type RateSourceConfig,
+} from '../lib/config';
 import { useApp } from '../state';
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -61,6 +63,25 @@ export function SettingsPage() {
       <Section title="信頼する coordinator（上ほど優先）">
         <p className="muted">外すと、その coordinator が委任した一覧を信頼しなくなります（解任）。</p>
         <StringList testid="settings-coordinators" values={draft.coordinators} placeholder="公開鍵（hex 64 文字）" onChange={(v) => set('coordinators', v)} />
+        {draft.coordinator_directory && (
+          <CoordinatorDirectory
+            url={draft.coordinator_directory}
+            coordinators={draft.coordinators}
+            onAdd={(c) => {
+              setSaved(false);
+              const bundles = draft.trust_bundles ?? [];
+              setDraft({
+                ...draft,
+                coordinators: [...draft.coordinators, c.pk],
+                ...(c.bundle && !bundles.includes(c.bundle) ? { trust_bundles: [...bundles, c.bundle] } : {}),
+              });
+            }}
+          />
+        )}
+      </Section>
+      <Section title="trust bundle（署名済みイベントの取得元）">
+        <p className="muted">登録簿の events.json など。中のイベントはリレーから届いたものと同じく検証するので、信頼は増えません。リレーが消したイベントも読めます。</p>
+        <StringList testid="settings-trust-bundles" values={draft.trust_bundles ?? []} placeholder="https://…/events.json" onChange={(v) => set('trust_bundles', v)} />
       </Section>
       <Section title="チェーン">
         <div className="grid2">
@@ -110,6 +131,66 @@ export function SettingsPage() {
   );
 }
 
+/** The coordinators of a directory (config.json `coordinator_directory`), each with a button to trust it. */
+function CoordinatorDirectory({ url, coordinators, onAdd }: { url: string; coordinators: string[]; onAdd: (c: DirectoryCoordinator) => void }) {
+  const [list, setList] = useState<DirectoryCoordinator[]>();
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    let live = true;
+    setError(undefined);
+    fetch(url, { cache: 'no-store' })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const parsed = parseCoordinatorDirectory(await res.json());
+        if (live) setList(parsed);
+      })
+      .catch((e: Error) => live && setError(`コーディネータの目録を読めません（${url}）: ${e.message}`));
+    return () => {
+      live = false;
+    };
+  }, [url]);
+  return (
+    <div data-testid="settings-directory" data-url={url}>
+      <h3>コーディネータの候補（目録）</h3>
+      <p className="muted">目録に載っているだけでは信頼しません。追加したものだけを信頼します。</p>
+      {list && list.length === 0 && <p className="muted" data-testid="settings-directory-empty">目録は空です。</p>}
+      {list && list.length > 0 && (
+        <table>
+          <tbody>
+            {list.map((c) => {
+              const added = coordinators.includes(c.pk);
+              return (
+                <tr key={c.pk} data-testid="settings-directory-item" data-pk={c.pk} data-added={added ? 'true' : 'false'}>
+                  <td>
+                    <b>{c.name}</b>
+                    <div className="muted">{c.description}</div>
+                    <div className="muted">
+                      {c.contact}
+                      {c.url && (
+                        <>
+                          {' · '}
+                          <a href={c.url} target="_blank" rel="noreferrer">{c.url}</a>
+                        </>
+                      )}
+                    </div>
+                    <code className="mono">{c.pk}</code>
+                  </td>
+                  <td>
+                    <button type="button" className="plain small" data-testid={`settings-directory-add-${c.name}`} disabled={added} onClick={() => onAdd(c)}>
+                      {added ? '追加済み' : '追加'}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      <ErrorText error={error} testid="settings-directory-error" />
+    </div>
+  );
+}
+
 /** Backup and removal of the key; reachable even when the runtime could not start (item 13). */
 function KeySection() {
   const { stored, identity, runtime, logout } = useApp();
@@ -148,6 +229,11 @@ function KeySection() {
 
   return (
     <Section title="鍵" testid="settings-key">
+      {runtime && (
+        <p>
+          公開鍵（Nostr, hex）: <code className="mono" data-testid="settings-pubkey">{runtime.pubkey}</code>
+        </p>
+      )}
       <p className="muted">{stored.vault ? '復元用の単語はパスフレーズで暗号化して保存しています。' : '復元用の単語は暗号化せずに保存しています。'}</p>
       <div className="row">
         {stored.vault && (
