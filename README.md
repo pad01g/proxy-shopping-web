@@ -1,5 +1,7 @@
 # proxy-shopping-web
 
+**Buy from cash-only shops with crypto, or earn as a proxy shopper: the browser app, guided demo, TypeScript protocol library and MCP server of proxy-shopping, a P2P network where a local shopper buys for remote users who pay through a 2-of-3 escrow with timelocks.** Agents: MCP server `io.github.pad01g/proxy-shopping` ([packages/mcp](packages/mcp)), skills `npx skills add pad01g/proxy-shopping-go`, [AGENTS.md](AGENTS.md); overview for machines: https://pad01g.github.io/proxy-shopping-docs/llms.txt.
+
 Browser side of proxy-shopping (spec: `../proxy-shopping-go/docs/spec.md`, lab: `docs/lab.md` there).
 
 ```
@@ -102,3 +104,7 @@ Entry points: `@proxy-shopping/core` (portable), `/node` (+ `FileStorage`), `/br
 - The browser talks to Esplora, the EVM RPC, rate sources and the faucet directly, so those
   endpoints must send CORS headers.
 - UI test ids: `apps/web/TESTIDS.md`.
+
+## License
+
+MIT ([LICENSE](LICENSE)).

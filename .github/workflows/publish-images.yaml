@@ -1,0 +1,85 @@
+name: Publish images
+
+# Images on ghcr.io:
+#   ghcr.io/pad01g/proxy-shopping-web   the public web app (apps/web); mount your config.json at /usr/share/nginx/html/config.json
+#   ghcr.io/pad01g/proxy-shopping-demo  the lab's guided demo (apps/demo)
+# The MCP server image is published by publish-mcp.yaml. A tag v<version> publishes that version as well as latest.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          repository: pad01g/proxy-shopping-go
+          path: proxy-shopping-go
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Unit tests (with the Go repo's cross-implementation vectors)
+        run: ln -s "$PWD/proxy-shopping-go" ../proxy-shopping-go && npm test
+      - run: npm run build
+
+  images:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: proxy-shopping-web
+            file: apps/web/Dockerfile
+            description: "proxy-shopping web app: order through a 2-of-3 escrow, act as escrow, operator or coordinator; keys stay in the browser"
+          - image: proxy-shopping-demo
+            file: apps/demo/Dockerfile
+            description: "proxy-shopping guided demo: every role with its own key on one screen, driven by a step-by-step guide"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/pad01g/${{ matrix.image }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+            type=semver,pattern={{version}}
+          labels: |
+            org.opencontainers.image.source=https://github.com/pad01g/proxy-shopping-web
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=MIT
+          annotations: |
+            org.opencontainers.image.source=https://github.com/pad01g/proxy-shopping-web
+            org.opencontainers.image.description=${{ matrix.description }}
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          provenance: false
