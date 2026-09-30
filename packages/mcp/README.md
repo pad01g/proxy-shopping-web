@@ -22,7 +22,7 @@ value. USDC is not available on ps-main yet.
 Claude Code:
 
 ```sh
-claude mcp add proxy-shopping -- docker run -i --rm -v proxy-shopping-mcp:/data ghcr.io/pad01g/proxy-shopping-mcp:0.1.0
+claude mcp add proxy-shopping -- docker run -i --rm -v proxy-shopping-mcp:/data ghcr.io/pad01g/proxy-shopping-mcp:0.1.1
 ```
 
 Other clients (`mcp.json`):
@@ -32,7 +32,7 @@ Other clients (`mcp.json`):
   "mcpServers": {
     "proxy-shopping": {
       "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "proxy-shopping-mcp:/data", "ghcr.io/pad01g/proxy-shopping-mcp:0.1.0"]
+      "args": ["run", "-i", "--rm", "-v", "proxy-shopping-mcp:/data", "ghcr.io/pad01g/proxy-shopping-mcp:0.1.1"]
     }
   }
 }
@@ -47,7 +47,7 @@ The local docker compose lab (proxy-shopping-go, demo server on `http://localhos
 ```sh
 claude mcp add proxy-shopping-lab -- docker run -i --rm --add-host=host.docker.internal:host-gateway \
   -v proxy-shopping-mcp-lab:/data -e PS_NETWORK=lab -e PS_LAB_URL=http://host.docker.internal:8888 \
-  ghcr.io/pad01g/proxy-shopping-mcp:0.1.0
+  ghcr.io/pad01g/proxy-shopping-mcp:0.1.1
 ```
 
 Without Docker (Node 22, from the repository root): `npm ci && npm run build -w @proxy-shopping/core -w @proxy-shopping/mcp`,

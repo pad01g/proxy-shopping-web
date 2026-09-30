@@ -1,6 +1,6 @@
 {
   "name": "@proxy-shopping/mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP server for the proxy-shopping P2P network: buy from cash-only or unsupported shops with crypto through a proxy shopper, with a 2-of-3 escrow; or earn as a proxy shopper",
   "license": "MIT",
   "type": "module",

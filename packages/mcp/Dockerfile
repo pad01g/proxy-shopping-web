@@ -1,7 +1,7 @@
 # MCP server for the proxy-shopping network (stdio). Build from the repository root:
-#   docker build -f packages/mcp/Dockerfile -t ghcr.io/pad01g/proxy-shopping-mcp:0.1.0 .
+#   docker build -f packages/mcp/Dockerfile -t ghcr.io/pad01g/proxy-shopping-mcp:0.1.1 .
 # Run (the key and the orders live in the volume mounted at /data):
-#   docker run -i --rm -v proxy-shopping-mcp:/data ghcr.io/pad01g/proxy-shopping-mcp:0.1.0
+#   docker run -i --rm -v proxy-shopping-mcp:/data ghcr.io/pad01g/proxy-shopping-mcp:0.1.1
 FROM node:22-bookworm AS build
 WORKDIR /src
 COPY package.json package-lock.json tsconfig.base.json ./

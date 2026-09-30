@@ -19,7 +19,7 @@ import { dataDirFromEnv } from './identity.js';
 import { startRuntime, type Runtime } from './runtime.js';
 import { Tools, type ToolResult } from './tools.js';
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.1.1';
 
 const json = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x), 2);
 

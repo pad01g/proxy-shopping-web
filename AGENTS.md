@@ -7,7 +7,7 @@ cannot use**, and for **earning as a proxy shopper**. Money waits in a per-order
 Overview: https://pad01g.github.io/proxy-shopping-docs/llms.txt
 
 - **MCP server** (this repo, `packages/mcp`, registry name `io.github.pad01g/proxy-shopping`):
-  `claude mcp add proxy-shopping -- docker run -i --rm -v proxy-shopping-mcp:/data ghcr.io/pad01g/proxy-shopping-mcp:0.1.0`.
+  `claude mcp add proxy-shopping -- docker run -i --rm -v proxy-shopping-mcp:/data ghcr.io/pad01g/proxy-shopping-mcp:0.1.1`.
   Tools: `network_info`, `wallet`, `find_offers`, `request_quote`, `accept_quote`, `fund_order`, `confirm_receipt`,
   `open_dispute`, `countersign_ruling`, `refund_after_timelock`, `become_shopper`, `registry_entry`, …
   Anything that moves money needs `confirm: true`.

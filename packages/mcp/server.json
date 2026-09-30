@@ -3,7 +3,7 @@
   "name": "io.github.pad01g/proxy-shopping",
   "title": "proxy-shopping: buy anywhere with crypto through a proxy shopper",
   "description": "Buy at cash-only or unsupported shops with BTC via a proxy shopper and 2-of-3 escrow, or earn as one",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "websiteUrl": "https://pad01g.github.io/proxy-shopping-docs/",
   "repository": {
     "url": "https://github.com/pad01g/proxy-shopping-web",
@@ -13,7 +13,7 @@
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/pad01g/proxy-shopping-mcp:0.1.0",
+      "identifier": "ghcr.io/pad01g/proxy-shopping-mcp:0.1.1",
       "transport": {
         "type": "stdio"
       },
