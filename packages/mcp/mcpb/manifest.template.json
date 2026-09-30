@@ -1,0 +1,49 @@
+{
+  "manifest_version": "0.3",
+  "name": "proxy-shopping",
+  "display_name": "Proxy Shopping",
+  "version": "",
+  "description": "Buy at cash-only or unsupported shops with BTC through a proxy shopper and a 2-of-3 escrow, or earn as a proxy shopper",
+  "long_description": "An MCP server for the proxy-shopping P2P network (Nostr). Buy from shops that take only cash or payments you cannot use: a local proxy shopper buys and ships, and you pay BTC into a per-order 2-of-3 escrow (you, the shopper, an escrow) with timelocks. Find offers, request and validate a quote (rate check, recomputed escrow address, timelocks), fund, confirm receipt, dispute, countersign the escrow's ruling, accept a refund, or take the funds back after the timelock. Tools that move money act only with confirm: true. Or earn: become_shopper plans an always-online shopper node that buys for remote users for a fee, registry_entry writes the file for getting listed. The public network ps-main uses BTC signet (test coins) and is new. The key and orders are kept in the data directory (default ~/.proxy-shopping-mcp).",
+  "author": { "name": "pad01g", "url": "https://github.com/pad01g" },
+  "repository": { "type": "git", "url": "https://github.com/pad01g/proxy-shopping-web.git" },
+  "homepage": "https://pad01g.github.io/proxy-shopping-docs/",
+  "documentation": "https://github.com/pad01g/proxy-shopping-web/tree/main/packages/mcp",
+  "support": "https://github.com/pad01g/proxy-shopping-web/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.js"],
+      "env": {
+        "PS_NETWORK": "${user_config.network}",
+        "PS_DATA_DIR": "${user_config.data_dir}"
+      }
+    }
+  },
+  "user_config": {
+    "network": {
+      "type": "string",
+      "title": "Network",
+      "description": "ps-main (public Nostr relays, BTC signet) or lab (the local docker compose lab at http://localhost:8888)",
+      "default": "ps-main",
+      "required": false
+    },
+    "data_dir": {
+      "type": "directory",
+      "title": "Data directory",
+      "description": "Where this agent's key (a BIP39 mnemonic, created on first run) and its orders are kept. Keep it and back it up: it controls the escrow of open orders.",
+      "default": "${HOME}/.proxy-shopping-mcp",
+      "required": false
+    }
+  },
+  "tools": [],
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": { "node": ">=22.0.0" }
+  },
+  "license": "MIT",
+  "keywords": ["bitcoin", "escrow", "nostr", "shopping", "payments", "multisig", "earn", "agents"]
+}

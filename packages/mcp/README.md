@@ -50,6 +50,10 @@ claude mcp add proxy-shopping-lab -- docker run -i --rm --add-host=host.docker.i
   ghcr.io/pad01g/proxy-shopping-mcp:0.1.2
 ```
 
+MCPB bundle (Claude Desktop and other MCPB clients: open the file to install; needs Node 22+): `proxy-shopping-<version>.mcpb`
+from the [releases](https://github.com/pad01g/proxy-shopping-web/releases); build it with `node packages/mcp/scripts/build-mcpb.mjs`
+after `npm run build -w @proxy-shopping/core`. Agents installing the server: [llms-install.md](llms-install.md).
+
 Without Docker (Node 22, from the repository root): `npm ci && npm run build -w @proxy-shopping/core -w @proxy-shopping/mcp`,
 then `node packages/mcp/dist/server.js` (bin `proxy-shopping-mcp`).
 

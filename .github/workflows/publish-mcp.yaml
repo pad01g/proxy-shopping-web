@@ -126,12 +126,21 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: MCPB bundle (one-click install for Claude Desktop and other MCPB clients; Smithery)
+        run: npm ci && npm run build -w @proxy-shopping/core && node packages/mcp/scripts/build-mcpb.mjs
       - name: GitHub Release for the tag (image and registry entry are published)
         env:
           GH_TOKEN: ${{ github.token }}
           V: ${{ needs.test.outputs.version }}
         run: |
-          gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
+          if gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --clobber "packages/mcp/dist-mcpb/proxy-shopping-$V.mcpb"
+            exit 0
+          fi
           gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --verify-tag --latest \
             --title "MCP server $V" \
             --notes "MCP server \`io.github.pad01g/proxy-shopping\` $V (packages/mcp).
@@ -140,4 +149,5 @@ jobs:
           claude mcp add proxy-shopping -- docker run -i --rm -v proxy-shopping-mcp:/data ghcr.io/pad01g/proxy-shopping-mcp:$V
           \`\`\`
 
-          Image: \`ghcr.io/pad01g/proxy-shopping-mcp:$V\` (linux/amd64, linux/arm64). Changes: https://github.com/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME/packages/mcp"
+          Image: \`ghcr.io/pad01g/proxy-shopping-mcp:$V\` (linux/amd64, linux/arm64). MCPB bundle: \`proxy-shopping-$V.mcpb\` below. Changes: https://github.com/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME/packages/mcp"
+          gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --clobber "packages/mcp/dist-mcpb/proxy-shopping-$V.mcpb"

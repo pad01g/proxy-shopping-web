@@ -5,3 +5,4 @@ dist
 test-results
 packages/core/test/.it
 dist-pages
+packages/mcp/dist-mcpb/
