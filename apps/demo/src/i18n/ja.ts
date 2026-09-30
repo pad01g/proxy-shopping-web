@@ -526,6 +526,33 @@ export const ja = {
   },
 
   /** Scenario titles and descriptions, by scenario id. */
+  mock: {
+    banner: 'モック: すべてこのブラウザの中で動いています（本物の網・チェーンには接続しません）',
+    switchLabel: 'モック',
+    switchTitle: (on: boolean): string => (on ? 'lab（docker compose の網）に切り替えて再読み込みします' : 'モック（このブラウザの中だけ）に切り替えて再読み込みします'),
+    loading: 'モックの網を準備しています…（ブラウザの中でリレー・チェーン・EVM・shopper を起動します）',
+    startFailed: 'このブラウザではモックの網を始められませんでした（Web Worker と IndexedDB が必要です）。',
+    labWarning: 'ここの操作は、このブラウザの中の模擬の網のためのものです。本物の網では、誰もブロックを掘らせたり時刻を進めたり、shopper を止めたりはできません。',
+    chainExplain:
+      'BTC はこのブラウザの中の模擬チェーン（取引の入力・署名・金額・手数料・CHECKLOCKTIMEVERIFY を確かめます）、EVM はブラウザの中で動く本物の EVM（@ethereumjs/vm, chain id 31337）です。模擬の miner は取引が届くと約 1 秒で 1 ブロック掘ります。',
+    whatTitle: 'モックで模擬しているもの',
+    what: [
+      'Nostr リレー（relay-1.test, relay-2.test）: ブラウザの中のリレー。各役割は自分の鍵でイベントに署名し、NIP-59 で包み、NIP-44 で暗号化して送ります。リレーは id と署名を確かめ、置き換え可能なイベントは最新だけを残します。',
+      'BTC（bitcoind + Esplora）: UTXO の台帳。取引は本物で、入力が未使用か、署名（BIP143）、2-of-3 の CHECKMULTISIG、T1・T2 の CHECKLOCKTIMEVERIFY、手数料（1 sat/vB 以上）と dust を確かめます。スクリプトと PSBT は core の本物のコードです。',
+      'EVM（anvil）: @ethereumjs/vm に lab と同じバイトコード（Safe v1.4.1, SafeProxyFactory, MultiSendCallOnly, フォールバックハンドラ, PSEscrowModule, PSSafeSetup, MockUSDC, レートの feed, PSBond）を同じアドレスに置きます。Safe の署名としきい値、モジュールのタイムロックは本物のコントラクトが確かめます。',
+      'shopper-1（Go ノード）: Go ノードの動きを TypeScript で再現した模擬のノード。店の危険度と現金のみの地域の判定、見積（レート・タイムロック・key_proof の確認）、チェーンでの入金の確認、代理購入、配送の報告、release と裁定の連署、T1 の受け取り、一時停止。',
+      '店・カード決済・shopper-bot・蛇口（faucet）・採掘と時刻送り・レート: 模擬（lab と同じ商品と値段、レート BTC/USD 100000, USD/JPY 150, USDC/USD 1）。',
+      '利用者・escrow・operator・coordinator は lab と同じ core の本物のクライアントで、鍵はこのブラウザに置きます（モック用に lab とは別に保存）。',
+      '網の状態はこのブラウザ（IndexedDB）に残り、同じブラウザの別のウィンドウとも共有されます。「デモを初期化」で消えます。',
+    ],
+    separateUnavailable:
+      'このブラウザには SharedWorker が無いので、模擬の網をウィンドウの間で共有できません。別々のウィンドウ（?role=…）は使えないため、このウィンドウですべての役割を動かしています。',
+    shopperExplain:
+      'shopper-1 は、このブラウザの中で動く模擬のノードです（Go ノードの動きを再現: 店の危険度の判定、見積、入金の確認、代理購入、配送の報告、支払いと裁定への連署、T1 の受け取り）。ここではその状態を見るだけです。',
+    faucetExplain: '模擬の蛇口（faucet）から、注文に使う BTC（signet）と USDC・ガス代の ETH を受け取れます。',
+    identityNote: '鍵はこのブラウザの localStorage に平文で置いています（デモ専用）。「デモを初期化」で消えます。',
+  },
+
   scenarios: {
     'normal-btc': {
       title: '正常系（BTC）',

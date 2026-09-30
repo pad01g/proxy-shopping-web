@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react';
-import { btcBalance, erc20Balance, ethBalance } from '../lib/lab-api';
 import { formatAsset, formatEth, short } from '../lib/format';
 import type { SessionRole } from '../lib/roles';
 import { useT } from '../i18n';
@@ -16,13 +15,13 @@ export interface WalletBalances {
 export function useBalances(role: SessionRole, ms = 5000): [WalletBalances | undefined, () => void] {
   const app = useApp();
   const id = app.ids[role];
-  const { urls } = app.config;
+  const b = app.backend.balances;
   const usdc = app.deployments?.usdc;
   return useLive(async () => {
     const [btc, eth, u] = await Promise.allSettled([
-      btcBalance(urls.esplora, id.btcAddress),
-      ethBalance(urls.evm, id.evmAddress),
-      usdc ? erc20Balance(urls.evm, usdc, id.evmAddress) : Promise.reject(new Error('no usdc')),
+      b.btc(id.btcAddress),
+      b.eth(id.evmAddress),
+      usdc ? b.erc20(usdc, id.evmAddress) : Promise.reject(new Error('no usdc')),
     ]);
     const v = <T,>(r: PromiseSettledResult<T>) => (r.status === 'fulfilled' ? r.value : undefined);
     return { btc: v(btc), eth: v(eth), usdc: v(u) };
@@ -44,7 +43,7 @@ export function IdentityCard({ role, title, children }: { role: SessionRole; tit
         <p>{m.identity.evm}<Copyable value={id.evmAddress} testid={`identity-${role}-evm`} />{sep}{bal?.usdc === undefined ? '…' : formatAsset(bal.usdc, 'usdc-evm')}{sep}{formatEth(bal?.eth)}</p>
       </div>
       <p className="muted small">
-        {role === 'coordinator' ? m.identity.coordinatorNote : m.identity.localNote}
+        {role === 'coordinator' ? m.identity.coordinatorNote : app.mock ? m.mock.identityNote : m.identity.localNote}
       </p>
       {children}
     </Section>

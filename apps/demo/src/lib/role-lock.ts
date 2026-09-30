@@ -1,3 +1,5 @@
+import { MODE_PREFIX } from './mode';
+
 /**
  * A role runs in one window at a time (two windows answering the same messages could, for example, sign
  * two rulings). Uses the Web Locks API; where it is missing (non-secure contexts) every window may run.
@@ -20,7 +22,7 @@ export function acquireRoleLock(role: string, opts: { steal?: boolean; onLost?: 
     const hold = new Promise<void>((r) => (release = r));
     let got = false;
     locks
-      .request(`ps-demo-role-${role}`, opts.steal ? { steal: true } : { ifAvailable: true }, async (lock) => {
+      .request(`${MODE_PREFIX}-role-${role}`, opts.steal ? { steal: true } : { ifAvailable: true }, async (lock) => {
         got = lock !== null;
         resolve({ held: got, release });
         if (got) await hold;

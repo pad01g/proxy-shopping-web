@@ -28,10 +28,11 @@ export function UserPanel() {
 
 function WalletActions() {
   const rt = useRuntime('user');
-  const u = useT().user;
+  const m = useT();
+  const u = m.user;
   return (
     <>
-      <Explain>{u.faucetExplain}</Explain>
+      <Explain>{rt.deps.backend.mock ? m.mock.faucetExplain : u.faucetExplain}</Explain>
       <div className="row">
         <ActionButton testid="wallet-faucet-btc" kind="plain" onClick={async () => {
           await rt.faucet.btc(rt.keys.btcWallet.address);

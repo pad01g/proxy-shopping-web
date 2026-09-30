@@ -1,7 +1,5 @@
-import {
-  CoingeckoSource, EsploraClient, EvmClient, FrankfurterSource, IndexedDBStorage, MappedTransport, PoolTransport, Session,
-  type Deployments, type KeySet, type RateSource,
-} from '@proxy-shopping/core/browser';
+import { IndexedDBStorage, Session, type Deployments, type KeySet } from '@proxy-shopping/core/browser';
+import type { Backend } from '../backend';
 import type { ResolvedConfig } from '../config';
 import type { SessionRole } from '../roles';
 import { writeSnapshot, type RoleSnap } from '../snapshots';
@@ -13,22 +11,21 @@ export interface RuntimeDeps {
   deployments?: Deployments;
   /** Pubkey of the demo coordinator: the one root of trust every demo role uses (§2.4). */
   coordinator: string;
-}
-
-function rateSources(config: ResolvedConfig): RateSource[] {
-  return config.urls.rates.map((r) => (r.type === 'coingecko' ? new CoingeckoSource(r.base) : new FrankfurterSource(r.base, ['JPY'])));
+  /** The lab through the demo server, or the in-browser mock world (lib/backend.ts). */
+  backend: Backend;
 }
 
 /**
  * One role's own Session: its keys, its IndexedDB database and its own relay connections. The protocol sees the
- * logical relay URLs; MappedTransport connects to the demo server's websocket paths instead.
+ * logical relay URLs; in lab mode MappedTransport connects to the demo server's websocket paths instead, in mock
+ * mode the relays are the mock world's.
  */
 export async function createSession(role: SessionRole, d: RuntimeDeps): Promise<{ session: Session; storage: IndexedDBStorage }> {
   const storage = await IndexedDBStorage.open(dbName(role));
   const c = d.config;
   const session = new Session({
     keys: d.keys,
-    transport: new MappedTransport(new PoolTransport(), c.physicalRelays),
+    transport: d.backend.transport(),
     storage,
     config: {
       network: c.network,
@@ -40,9 +37,9 @@ export async function createSession(role: SessionRole, d: RuntimeDeps): Promise<
       maxClockSkewSeconds: c.max_clock_skew_seconds,
       allowPrivateEndpoints: !!c.allow_private_endpoints,
     },
-    chain: new EsploraClient(c.urls.esplora),
-    evm: d.deployments ? new EvmClient(d.deployments.chain_id, c.urls.evm, d.keys.evmAccount, d.deployments) : undefined,
-    rates: rateSources(c),
+    chain: d.backend.chain(),
+    evm: d.deployments ? d.backend.evm(d.keys, d.deployments) : undefined,
+    rates: d.backend.rateSources(),
   });
   return { session, storage };
 }

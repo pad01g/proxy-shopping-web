@@ -25,6 +25,8 @@ docker run --rm -v "$PWD":/src -v "$PWD/../proxy-shopping-go":/proxy-shopping-go
 scripts/integration.sh
 # the built web app in Chromium against a mini lab (TS shopper, faucet, escrow …)
 scripts/e2e-web.sh
+# the demo in mock mode (GitHub Pages build) in Chromium: every scenario, nothing leaves the page
+scripts/e2e-demo-mock.sh
 
 # web image (config.json is mounted at runtime)
 docker build -f apps/web/Dockerfile -t proxy-shopping-web .
@@ -36,6 +38,13 @@ and `lab/keys/public.json`. Without the vectors file `npm test` fails, so CI can
 set `SKIP_VECTORS=1` to run the other tests without it.
 
 ## apps/demo
+
+**Try it in your browser: https://pad01g.github.io/proxy-shopping-web/ (everything simulated in the page).** That build
+runs in *mock mode* (`?mock=1`, header switch モック / Mock): the relays, the BTC chain (with script checks), a real EVM
+with the lab's Safe and escrow-module bytecode, the faucet, the rates, the shops and the shopper-1 node run inside the
+browser (a SharedWorker shared by all windows), while the four roles use core's real clients. Details, what is simulated
+and its limits: [apps/demo/README.md](apps/demo/README.md). The mock e2e (all scenarios, English, separate windows, no
+request leaving the page): `scripts/e2e-demo-mock.sh`; Pages is deployed by `.github/workflows/pages-demo.yaml`.
 
 The integrated demo for the docker compose lab (`../proxy-shopping-go`, compose service `demo`, http://localhost:8888/;
 usage in `../proxy-shopping-go/docs/lab.md`「デモ画面」). User, escrow, operator and coordinator each have their own key

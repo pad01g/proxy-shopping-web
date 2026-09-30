@@ -34,6 +34,8 @@ export function App() {
   return (
     <div className="layout">
       <Header />
+      {app.mock && <p className="banner mock center" data-testid="mock-banner">{m.mock.banner}</p>}
+      {app.separateUnavailable && <p className="banner warn" data-testid="mock-separate-unavailable">{m.mock.separateUnavailable}</p>}
       {resetting && <p className="banner warn center" data-testid="resetting">{m.app.resetting}</p>}
       {app.deploymentsError && (
         <p className="banner error" data-testid="deployments-error">{m.app.deploymentsError(app.config.deployments, app.deploymentsError)}</p>

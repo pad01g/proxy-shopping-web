@@ -1,13 +1,15 @@
 /**
  * Browser storage of the demo. Everything lives under one prefix so "reset demo" (デモを初期化) can wipe it:
- * localStorage keys `ps-demo.*` and one IndexedDB database per role (`ps-demo-<role>`).
+ * localStorage keys `ps-demo.*` and one IndexedDB database per role (`ps-demo-<role>`); in mock mode
+ * `ps-demo-mock.*` and `ps-demo-mock-<role>` (lib/mode.ts), so lab and mock data never mix.
  */
 import { msg } from '../i18n';
+import { MODE_PREFIX } from './mode';
 import type { SessionRole } from './roles';
 
-export const LS_PREFIX = 'ps-demo.';
+export const LS_PREFIX = `${MODE_PREFIX}.`;
 
-export const dbName = (role: SessionRole): string => `ps-demo-${role}`;
+export const dbName = (role: SessionRole): string => `${MODE_PREFIX}-${role}`;
 
 export function readJson<T>(key: string): T | undefined {
   try {

@@ -1,4 +1,5 @@
 import { setLang, useLang, useT, type Lang } from '../i18n';
+import { IS_MOCK, mockSwitchUrl } from '../lib/mode';
 import { useScenarios } from '../scenarios';
 import { useApp, useDemoState } from '../state';
 import { ActionButton } from './ui';
@@ -40,8 +41,27 @@ export function Header() {
       >
         {m.header.reset}
       </ActionButton>
+      <MockSwitch />
       <LangSwitch />
     </header>
+  );
+}
+
+/** モック / Mock: reload the page in the other mode (`?mock=1` / `?mock=0`); each mode keeps its own data. */
+function MockSwitch() {
+  const m = useT();
+  return (
+    <button
+      type="button"
+      className={`plain small mock-switch${IS_MOCK ? ' selected' : ''}`}
+      data-testid="mock-switch"
+      data-mock={IS_MOCK ? 'true' : 'false'}
+      aria-pressed={IS_MOCK}
+      title={m.mock.switchTitle(IS_MOCK)}
+      onClick={() => window.location.assign(mockSwitchUrl(!IS_MOCK))}
+    >
+      <span aria-hidden>{IS_MOCK ? '☑' : '☐'}</span> {m.mock.switchLabel}
+    </button>
   );
 }
 

@@ -1,15 +1,16 @@
 import { useState } from 'react';
 import { ActionButton, Explain, Field, Section } from '../../components/ui';
 import { useT } from '../../i18n';
-import { faucetApi, ratesApi } from '../../lib/lab-api';
 import { formatEth, formatTime } from '../../lib/format';
 import { every, useApp, useApplyPrefill, useDemoState, useLive, usePrefill } from '../../state';
 
 export function LabPanel() {
+  const app = useApp();
   const m = useT();
   return (
     <div data-testid="panel-lab">
-      <p className="banner warn">{m.lab.warning}</p>
+      <p className="banner warn">{app.mock ? m.mock.labWarning : m.lab.warning}</p>
+      {app.mock && <MockSection />}
       <ChainSection />
       <ShopperNodeSection />
       <RatesSection />
@@ -17,18 +18,30 @@ export function LabPanel() {
   );
 }
 
+/** Mock mode: what runs in the page instead of the lab. */
+function MockSection() {
+  const m = useT();
+  return (
+    <Section title={m.mock.whatTitle} testid="lab-mock-info">
+      <ul className="mock-list">
+        {m.mock.what.map((line, i) => <li key={i}>{line}</li>)}
+      </ul>
+    </Section>
+  );
+}
+
 function ChainSection() {
   const app = useApp();
   const { lab } = useDemoState();
   const m = useT();
-  const faucet = faucetApi(app.config.urls.faucet);
+  const faucet = app.backend.faucet;
   const minePrefill = usePrefill('lab-mine');
   const [blocks, setBlocks] = useState(() => Number(minePrefill?.blocks ?? 1));
   const [seconds, setSeconds] = useState(3600);
   useApplyPrefill('lab-mine', (p) => typeof p.blocks === 'number' && setBlocks(p.blocks));
   return (
     <Section title={m.lab.chain} testid="lab-chain">
-      <Explain>{m.lab.chainExplain}</Explain>
+      <Explain>{app.mock ? m.mock.chainExplain : m.lab.chainExplain}</Explain>
       <p data-testid="lab-heights" data-btc={lab.heights?.btc ?? ''} data-evm-time={lab.heights?.evm_time ?? ''}>
         {m.lab.btcHeight}<strong>{lab.heights?.btc ?? '…'}</strong>{m.common.sep}{m.lab.evmTime}{lab.heights ? formatTime(lab.heights.evm_time) : '…'}
         {lab.heightsError && <span className="error"> {lab.heightsError}</span>}
@@ -63,7 +76,7 @@ function ShopperNodeSection() {
   const app = useApp();
   const { lab } = useDemoState();
   const m = useT();
-  const faucet = faucetApi(app.config.urls.faucet);
+  const faucet = app.backend.faucet;
   const paused = (lab.shopper.status?.paused_until ?? 0) > Date.now() / 1000;
   return (
     <Section title={m.lab.node(app.shopper.name)} testid="lab-shopper">
@@ -98,7 +111,7 @@ function ShopperNodeSection() {
 function RatesSection() {
   const app = useApp();
   const m = useT();
-  const rates = ratesApi(app.config.urls.ratesAdmin);
+  const rates = app.backend.rates;
   const [current, refresh] = useLive(() => rates.get(), every(10_000), []);
   const [pair, setPair] = useState('BTC/USD');
   const [value, setValue] = useState('');

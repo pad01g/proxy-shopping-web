@@ -1,0 +1,65 @@
+name: Demo on GitHub Pages
+
+# https://pad01g.github.io/proxy-shopping-web/ — the guided demo (apps/demo) in mock mode: relays, chains, EVM,
+# faucet, rates, shops and the shopper node all run inside the visitor's browser (apps/demo/src/mock), so the
+# static files are all it needs. The contract bytecode is vendored (apps/demo/src/mock/world/evm/contracts.json).
+# Before deploying, the mock world's unit tests and the mock e2e (all 7 scenarios, English, separate windows,
+# no request leaving the page) run against the built files, served under /proxy-shopping-web/ like Pages does.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-demo
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'pad01g/proxy-shopping-web'
+    runs-on: ubuntu-latest
+    # The Playwright image has Node and the browsers of the pinned @playwright/test (1.55.0).
+    container:
+      image: mcr.microsoft.com/playwright:v1.55.0-noble
+      options: --ipc=host
+    steps:
+      - uses: actions/checkout@v5
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build -w @proxy-shopping/core
+      - name: Unit tests of the mock world (chain, EVM, shopper, all scenarios with core's clients)
+        run: npm test -w @proxy-shopping/demo
+      - name: Build the demo for Pages (mock by default, relative asset URLs)
+        run: npm run build:pages -w @proxy-shopping/demo
+      - name: Mock e2e against the built files
+        working-directory: apps/demo
+        run: |
+          node e2e/serve.mjs dist-pages 4173 /proxy-shopping-web/ &
+          sleep 1
+          npx playwright test -c e2e/playwright.config.ts
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-mock-results
+          path: apps/demo/test-results/e2e-mock
+          retention-days: 7
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/demo/dist-pages
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

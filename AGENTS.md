@@ -26,5 +26,7 @@ on their behalf without asking.
   all-roles demo). Run in Docker (no host Node assumed):
   `docker run --rm -v "$PWD":/src -v ps-npm:/root/.npm -v "$PWD/../proxy-shopping-go":/proxy-shopping-go:ro -w /src node:22-bookworm sh -c "npm ci && npm run typecheck && npm test && npm run build"`;
   integration and UI e2e: `scripts/integration.sh`, `scripts/e2e-web.sh`; the full lab e2e runs from proxy-shopping-go.
+  The demo's mock mode (everything in the browser, the GitHub Pages build https://pad01g.github.io/proxy-shopping-web/):
+  `scripts/e2e-demo-mock.sh`, details in `apps/demo/README.md`.
 - UI tests rely on `data-testid`s (`apps/web/TESTIDS.md`, `apps/demo/TESTIDS.md`); keep them stable.
 - Never auto-sign money movements; validate every received body (`nostr/schema.ts`); settle only on chain evidence.

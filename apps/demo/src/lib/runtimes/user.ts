@@ -1,5 +1,4 @@
 import { UserClient, type IndexedDBStorage, type Offer, type Payment, type Session, type UserOrder } from '@proxy-shopping/core/browser';
-import { faucetApi } from '../lab-api';
 import type { OrderSnap, UserSnap } from '../snapshots';
 import { createSession, RoleRuntime, type RuntimeDeps } from './base';
 
@@ -67,7 +66,7 @@ export class UserRuntime extends RoleRuntime<'user'> {
   }
 
   get faucet() {
-    return faucetApi(this.deps.config.urls.faucet);
+    return this.deps.backend.faucet;
   }
 
   async refreshBalances(): Promise<Balances> {

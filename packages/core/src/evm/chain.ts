@@ -30,16 +30,23 @@ export class EvmClient {
   readonly wallet: WalletClient<Transport, Chain, PrivateKeyAccount>;
   private creationCode?: Hex;
 
+  /**
+   * `rpc` is the JSON-RPC URL, or a viem transport (e.g. `custom(provider)` for an EVM that is not reached over
+   * HTTP, like the demo's in-browser one); `opts.pollingInterval` is how often receipts are polled (ms).
+   */
   constructor(
     readonly chainId: number,
-    rpc: string,
+    rpc: string | Transport,
     readonly account: PrivateKeyAccount,
     readonly deployments: Deployments,
+    opts: { pollingInterval?: number } = {},
   ) {
-    const chain = evmChain(chainId, rpc);
+    const url = typeof rpc === 'string' ? rpc : 'http://in-process.invalid';
+    const chain = evmChain(chainId, url);
+    const transport = typeof rpc === 'string' ? http(rpc) : rpc;
     // No CCIP-Read (EIP-3668): a contract we call must never make the client fetch arbitrary URLs.
-    this.public = createPublicClient({ chain, transport: http(rpc), ccipRead: false });
-    this.wallet = createWalletClient({ chain, transport: http(rpc), account, ccipRead: false });
+    this.public = createPublicClient({ chain, transport, ccipRead: false, pollingInterval: opts.pollingInterval });
+    this.wallet = createWalletClient({ chain, transport, account, ccipRead: false, pollingInterval: opts.pollingInterval });
   }
 
   get address(): `0x${string}` {

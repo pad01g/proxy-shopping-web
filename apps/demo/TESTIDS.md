@@ -17,6 +17,19 @@ skips when it looks for Japanese: other parties' free text (dispute text, ruling
 published profile names and delegation notes, the decrypted address, core's and the node's error / history details, values
 inside timeline lines, the original text of unknown timeline kinds, and the "日本語" button (a language's own name).
 
+## Mock mode
+
+`?mock=1` runs everything inside the browser (src/mock), `?mock=0` against the lab; without the parameter the build
+decides (`VITE_DEMO_MOCK=1` in `.env.pages`, the GitHub Pages build). Each mode keeps its own data (`ps-demo-mock.*` /
+`ps-demo-mock-<role>` vs `ps-demo.*` / `ps-demo-<role>`). Test ids and the guide are the same in both modes.
+
+| testid | element | attributes |
+|---|---|---|
+| `mock-switch` | header toggle "モック / Mock": reloads the page with `?mock=1` / `?mock=0` | `data-mock="true\|false"` |
+| `mock-banner` | banner under the header in mock mode (「モック: すべてこのブラウザの中で動いています…」) | |
+| `mock-separate-unavailable` | `?role=…` in a browser without SharedWorker: every role runs in this window | |
+| `lab-mock-info` | lab tab: what the mock simulates | |
+
 ## Guide and layout
 
 | testid | element | attributes |

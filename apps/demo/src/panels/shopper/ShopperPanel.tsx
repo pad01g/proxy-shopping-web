@@ -21,7 +21,7 @@ export function ShopperPanel() {
   return (
     <div data-testid="panel-shopper">
       <Section title={s.title(app.shopper.name)} testid="shopper-status">
-        <Explain>{s.explain}</Explain>
+        <Explain>{app.mock ? m.mock.shopperExplain : s.explain}</Explain>
         {lab.shopper.statusError && <p className="banner error">{s.unreachable}{lab.shopper.statusError}</p>}
         {st && (
           <p data-testid="shopper-node-status" data-paused={paused ? 'true' : 'false'}>

@@ -4,3 +4,4 @@ dist
 .vite
 test-results
 packages/core/test/.it
+dist-pages

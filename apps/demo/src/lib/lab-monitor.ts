@@ -1,8 +1,9 @@
 import { KIND } from '@proxy-shopping/core/browser';
-import { serverUrl, type ResolvedConfig, type ShopperNode } from './config';
-import { ethBalance, faucetApi, nodeApi, type Heights, type NodeOrderSummary, type NodeStatus } from './lab-api';
+import type { Backend } from './backend';
+import type { ShopperNode } from './config';
+import type { Heights, NodeOrderSummary, NodeStatus } from './lab-api';
 
-/** What the lab tells every window over HTTP (no keys needed): chain heights and the shopper node's state. */
+/** What the lab (or the mock world) tells every window (no keys needed): chain heights and the shopper node's state. */
 export interface LabSnap {
   at: number;
   heights?: Heights;
@@ -23,7 +24,7 @@ export interface LabSnap {
 
 const TRUST_EVERY = 2;
 
-/** Polls the lab every few seconds; runs in every window. */
+/** Polls the lab (or the mock world) every few seconds; runs in every window. */
 export class LabMonitor {
   private snap: LabSnap;
   private timer?: ReturnType<typeof setInterval>;
@@ -32,7 +33,7 @@ export class LabMonitor {
   private readonly listeners = new Set<() => void>();
 
   constructor(
-    private readonly config: ResolvedConfig,
+    private readonly backend: Backend,
     readonly shopper: ShopperNode,
     private readonly everyMs = 2500,
   ) {
@@ -44,7 +45,7 @@ export class LabMonitor {
   }
 
   get node() {
-    return nodeApi(serverUrl(this.shopper.node));
+    return this.backend.node(this.shopper);
   }
 
   onChange(fn: () => void): () => void {
@@ -71,14 +72,14 @@ export class LabMonitor {
     this.busy = true;
     const withTrust = force || this.tick++ % TRUST_EVERY === 0;
     try {
-      const faucet = faucetApi(this.config.urls.faucet);
+      const faucet = this.backend.faucet;
       const node = this.node;
       const [heights, status, orders, trust, eth] = await Promise.allSettled([
         faucet.height(),
         node.status(),
         node.orders(),
         withTrust ? node.trust() : Promise.reject(new Error('skipped')),
-        this.shopper.evm_address ? ethBalance(this.config.urls.evm, this.shopper.evm_address) : Promise.reject(new Error('no address')),
+        this.shopper.evm_address ? this.backend.balances.eth(this.shopper.evm_address) : Promise.reject(new Error('no address')),
       ]);
       const prev = this.snap.shopper;
       this.snap = {

@@ -516,6 +516,33 @@ export const en: Messages = {
     resetRates: 'Back to defaults',
   },
 
+  mock: {
+    banner: 'Mock: everything runs inside this browser (it connects to no real network or chain)',
+    switchLabel: 'Mock',
+    switchTitle: (on) => (on ? 'Switch to the lab (docker compose network) and reload' : 'Switch to the mock (inside this browser only) and reload'),
+    loading: 'Preparing the mock network… (starting relays, chains, the EVM and the shopper inside the browser)',
+    startFailed: 'This browser could not start the mock network (it needs Web Workers and IndexedDB).',
+    labWarning: 'These controls act on the simulated network inside this browser. On a real network nobody can mine blocks on demand, advance time or stop the shopper.',
+    chainExplain:
+      'BTC is a simulated chain inside this browser (it checks every transaction’s inputs, signatures, amounts, fee and CHECKLOCKTIMEVERIFY); the EVM is a real EVM running in the browser (@ethereumjs/vm, chain id 31337). The mock miner mines a block about one second after a transaction arrives.',
+    whatTitle: 'What the mock simulates',
+    what: [
+      'Nostr relays (relay-1.test, relay-2.test): relays inside the browser. Every role signs its events with its own key, gift-wraps them (NIP-59) and encrypts them (NIP-44); the relays check ids and signatures and keep only the latest replaceable events.',
+      'BTC (bitcoind + Esplora): a UTXO ledger. Transactions are real: it checks that inputs are unspent, the signatures (BIP143), the 2-of-3 CHECKMULTISIG, the T1/T2 CHECKLOCKTIMEVERIFY, the fee (at least 1 sat/vB) and dust. Scripts and PSBTs are core’s real code.',
+      'EVM (anvil): @ethereumjs/vm with the lab’s bytecode (Safe v1.4.1, SafeProxyFactory, MultiSendCallOnly, fallback handler, PSEscrowModule, PSSafeSetup, MockUSDC, rate feeds, PSBond) at the lab’s addresses. The real contracts enforce Safe signatures, the threshold and the module’s timelocks.',
+      'shopper-1 (the Go node): a simulated node that reproduces the Go node in TypeScript — shop risk and cash-only region checks, quotes (rates, timelocks, key_proof), funding checked on chain, purchase, shipping updates, countersigning releases and rulings, the T1 claim, and pausing.',
+      'Shops, card gateway, shopper-bot, faucet, mining and time warp, rates: simulated, with the lab’s items and prices and rates BTC/USD 100000, USD/JPY 150, USDC/USD 1.',
+      'User, escrow, operator and coordinator are core’s real clients, as in the lab; their keys stay in this browser (stored apart from the lab’s).',
+      'The network’s state stays in this browser (IndexedDB) and is shared with its other windows. “Reset demo” wipes it.',
+    ],
+    separateUnavailable:
+      'This browser has no SharedWorker, so the simulated network cannot be shared between windows. Separate windows (?role=…) are not available; every role runs in this window.',
+    shopperExplain:
+      'shopper-1 is a simulated node running inside this browser (it reproduces the Go node: shop risk check, quote, funding check, purchase, shipping updates, countersigning payouts and rulings, the T1 claim). This tab only shows its state.',
+    faucetExplain: 'Get BTC (signet) for orders, plus USDC and ETH for gas, from the simulated faucet.',
+    identityNote: 'The key is stored in plain text in this browser’s localStorage (demo only). “Reset demo” deletes it.',
+  },
+
   scenarios: {
     'normal-btc': {
       title: 'Happy path (BTC)',
