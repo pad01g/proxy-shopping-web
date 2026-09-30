@@ -3,7 +3,7 @@
  * running while the server runs, so messages from shoppers and escrows keep arriving and are stored.
  */
 import {
-  bundleEvents, CoingeckoSource, EsploraClient, EvmClient, FileStorage, FrankfurterSource, KeySet, MappedTransport, PoolTransport, Session, UserClient,
+  bundleEvents, EsploraClient, EvmClient, FileStorage, rateSourceFromConfig, KeySet, MappedTransport, PoolTransport, Session, UserClient,
   type Deployments, type DirectorySnapshot, type NostrTransport, type RateSource,
 } from '@proxy-shopping/core/node';
 import { parseCoordinators, type CoordinatorInfo, type NetworkConfig } from './config.js';
@@ -134,7 +134,7 @@ export function labFaucet(base: string): LabFaucet {
 }
 
 export function rateSources(cfg: NetworkConfig): RateSource[] {
-  return cfg.rates.map((r) => (r.type === 'coingecko' ? new CoingeckoSource(r.base) : new FrankfurterSource(r.base, ['JPY'])));
+  return cfg.rates.map((r) => rateSourceFromConfig(r));
 }
 
 export interface StartOptions {

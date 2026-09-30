@@ -18,12 +18,12 @@
   "deployments_url": "",
   "rates": [
     {
-      "type": "coingecko",
-      "base": "https://api.coingecko.com"
+      "type": "mempool",
+      "base": "https://mempool.space"
     },
     {
       "type": "frankfurter",
-      "base": "https://api.frankfurter.app"
+      "base": "https://api.frankfurter.dev/v1"
     }
   ]
 }

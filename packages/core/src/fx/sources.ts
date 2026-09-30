@@ -54,6 +54,26 @@ export class CoingeckoSource implements RateSource {
   }
 }
 
+/**
+ * BTC prices from mempool.space: GET {base}/api/v1/prices →
+ * {"time":1790727905,"USD":83464,"JPY":13124019,…}. No API key and CORS open, so browsers can use it directly.
+ */
+export class MempoolSource implements RateSource {
+  readonly name = 'mempool';
+  constructor(
+    private readonly base: string,
+    private readonly fetchFn: FetchLike = defaultFetch,
+  ) {}
+
+  async fetch(): Promise<RateObservation[]> {
+    const body = (await getJson(this.fetchFn, `${trimBase(this.base)}/api/v1/prices`)) as Record<string, unknown>;
+    const at = nowSeconds();
+    return Object.entries(body)
+      .filter(([k, v]) => k !== 'time' && typeof v === 'number' && Number.isFinite(v) && v > 0)
+      .map(([quote, rate]) => ({ base: 'BTC', quote: quote.toUpperCase(), rate: rate as number, source: this.name, at }));
+  }
+}
+
 /** Chainlink AggregatorV3 feeds, e.g. {"BTC/USD": "0x…", "JPY/USD": "0x…"}. */
 export class ChainlinkSource implements RateSource {
   readonly name = 'chainlink';
@@ -97,5 +117,21 @@ export class StaticSource implements RateSource {
       const [base, quote] = pair.split('/');
       return { base, quote, rate, source: this.name, at };
     });
+  }
+}
+
+/** A rate source from configuration (`{type, base}`), as the web app, the demo and the MCP server write it. */
+export type RateSourceConfig = { type: 'mempool' | 'coingecko' | 'frankfurter'; base: string; fiat?: string[] };
+
+export function rateSourceFromConfig(c: RateSourceConfig, fetchFn: FetchLike = defaultFetch): RateSource {
+  switch (c.type) {
+    case 'mempool':
+      return new MempoolSource(c.base, fetchFn);
+    case 'coingecko':
+      return new CoingeckoSource(c.base, fetchFn);
+    case 'frankfurter':
+      return new FrankfurterSource(c.base, c.fiat ?? ['JPY'], fetchFn);
+    default:
+      throw new Error(`unknown rate source type ${(c as { type: string }).type}`);
   }
 }

@@ -2,7 +2,7 @@ import { endpointProblem, type TimelockPolicy } from '@proxy-shopping/core/brows
 
 /** Runtime configuration: /config.json, overridable in Settings (kept in localStorage). */
 export interface RateSourceConfig {
-  type: 'frankfurter' | 'coingecko' | 'chainlink' | 'static';
+  type: 'mempool' | 'frankfurter' | 'coingecko' | 'chainlink' | 'static';
   base?: string;
   /** For `static`: fixed pairs, e.g. {"BTC/JPY": 15000000}. */
   rates?: Record<string, number>;

@@ -10,7 +10,7 @@
 import { readFile } from 'node:fs/promises';
 import type { TimelockPolicy } from '@proxy-shopping/core/node';
 
-export type RateConfig = { type: 'coingecko' | 'frankfurter'; base: string };
+export type RateConfig = { type: 'mempool' | 'coingecko' | 'frankfurter'; base: string };
 
 export interface CoordinatorInfo {
   pubkey: string;
@@ -60,8 +60,9 @@ export function psMainPreset(): NetworkConfig {
     coordinators: [{ pubkey: PS_MAIN_DEFAULT_COORDINATOR, name: 'default ps-main coordinator', source: 'preset' }],
     esplora: 'https://mempool.space/signet/api',
     rates: [
-      { type: 'coingecko', base: 'https://api.coingecko.com' },
-      { type: 'frankfurter', base: 'https://api.frankfurter.app' },
+      // BTC prices without an API key; fiat cross rates (api.frankfurter.app moved to .dev/v1)
+      { type: 'mempool', base: 'https://mempool.space' },
+      { type: 'frankfurter', base: 'https://api.frankfurter.dev/v1' },
     ],
     retryIntervalMs: 30_000,
     trustBundleUrls: [`${REGISTRY_BASE}/events.json`],

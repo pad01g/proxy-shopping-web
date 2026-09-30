@@ -299,6 +299,7 @@ function RatesEditor({ value, onChange }: { value: RateSourceConfig[]; onChange:
       </table>
       <div className="row">
         <select data-testid="settings-rates-type" value={type} onChange={(e) => setType(e.target.value as RateSourceConfig['type'])}>
+          <option value="mempool">mempool（mempool.space の BTC 価格）</option>
           <option value="coingecko">coingecko</option>
           <option value="frankfurter">frankfurter</option>
           <option value="chainlink">chainlink（deployments の feeds）</option>

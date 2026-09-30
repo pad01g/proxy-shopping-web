@@ -1,6 +1,6 @@
 import {
-  ChainlinkSource, CoingeckoSource, CoordinatorClient, deploymentsSchema, EscrowClient, EsploraClient, EvmClient, FrankfurterSource,
-  IndexedDBStorage, KeySet, Nip07Signer, OperatorClient, PoolTransport, Session, ShopperProfile, StaticSource,
+  ChainlinkSource, CoordinatorClient, deploymentsSchema, EscrowClient, EsploraClient, EvmClient,
+  IndexedDBStorage, KeySet, Nip07Signer, OperatorClient, PoolTransport, rateSourceFromConfig, Session, ShopperProfile, StaticSource,
   UserClient, type Deployments, type Nip07Provider, type RateSource,
 } from '@proxy-shopping/core/browser';
 import { configProblems, type AppConfig, type RateSourceConfig } from './config';
@@ -38,8 +38,7 @@ async function loadDeployments(url: string): Promise<Deployments> {
 function rateSources(cfg: RateSourceConfig[], evm?: EvmClient, d?: Deployments): RateSource[] {
   const out: RateSource[] = [];
   for (const r of cfg) {
-    if (r.type === 'frankfurter' && r.base) out.push(new FrankfurterSource(r.base, ['JPY']));
-    else if (r.type === 'coingecko' && r.base) out.push(new CoingeckoSource(r.base));
+    if ((r.type === 'mempool' || r.type === 'coingecko' || r.type === 'frankfurter') && r.base) out.push(rateSourceFromConfig({ type: r.type, base: r.base }));
     else if (r.type === 'chainlink' && evm && d?.feeds) out.push(new ChainlinkSource(evm.public, d.feeds));
     else if (r.type === 'static' && r.rates) out.push(new StaticSource(r.rates));
   }

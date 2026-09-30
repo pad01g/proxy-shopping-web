@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { checkQuoteRate, deviationLevel } from './check.js';
 import { computePair, median } from './rates.js';
-import { ChainlinkSource, CoingeckoSource, FrankfurterSource, StaticSource } from './sources.js';
+import { ChainlinkSource, CoingeckoSource, FrankfurterSource, MempoolSource, StaticSource, rateSourceFromConfig } from './sources.js';
 import type { FetchLike } from './types.js';
 
 const fakeFetch = (routes: Record<string, unknown>): FetchLike => async (url) => {
@@ -23,6 +23,16 @@ describe('fx', () => {
     },
   });
   const sources = [new CoingeckoSource('https://rates.test/coingecko', fetch), new FrankfurterSource('https://rates.test/frankfurter/', ['JPY'], fetch)];
+
+  it('reads BTC prices from mempool.space and builds sources from config', async () => {
+    const f = fakeFetch({ 'https://mempool.space/api/v1/prices': { time: 1790727905, USD: 83464, JPY: 13124019, EUR: 73622 } });
+    const obs = await new MempoolSource('https://mempool.space/', f).fetch();
+    expect(obs.map((o) => `${o.base}/${o.quote}=${o.rate}`).sort()).toEqual(['BTC/EUR=73622', 'BTC/JPY=13124019', 'BTC/USD=83464']);
+    const fromConfig = await rateSourceFromConfig({ type: 'mempool', base: 'https://mempool.space' }, f).fetch();
+    expect(computePair(fromConfig, 'BTC/JPY').rate).toBe(13124019);
+    expect(rateSourceFromConfig({ type: 'frankfurter', base: 'https://x' }).name).toBe('frankfurter');
+    expect(() => rateSourceFromConfig({ type: 'nope' as never, base: '' })).toThrow(/unknown rate source/);
+  });
 
   it('median', () => {
     expect(median([3, 1, 2])).toBe(2);
