@@ -33,7 +33,7 @@ export class EvmFaucet {
   /** Add `eth` wei and mint `usdc` base units to `address`. */
   fund(address: string, amounts: { eth: bigint; usdc: bigint }): Promise<{ usdcTx?: Hex }> {
     const run = this.queue.then(async () => {
-      if (amounts.eth > 0n) await this.evm.setBalance(address, (await this.evm.balance(address)) + amounts.eth);
+      if (amounts.eth > 0n) await this.evm.addBalance(address, amounts.eth);
       if (amounts.usdc <= 0n) return {};
       const usdcTx = await this.wallet.writeContract({ address: this.d.usdc, abi: mintAbi, functionName: 'mint', args: [address as Hex, amounts.usdc] });
       return { usdcTx };

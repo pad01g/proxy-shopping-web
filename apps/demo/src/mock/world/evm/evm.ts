@@ -291,30 +291,44 @@ export class MockEvm {
 
   // ---------- lab operations (faucet, time) ----------
 
+  // Every access goes through `serial`: a read (eth_call checkpoints and reverts the state) must never
+  // interleave with a transaction being executed.
+
   sendRaw(raw: Hex): Promise<Hex> {
-    return this.serial(async () => {
-      const op: EvmOp = { t: 'tx', raw, time: this.nextTime() };
-      const hash = (await this.apply(op)) as Hex;
-      this.persist();
-      return hash;
-    });
+    return this.serial(() => this.sendRawNow(raw));
+  }
+
+  private async sendRawNow(raw: Hex): Promise<Hex> {
+    const op: EvmOp = { t: 'tx', raw, time: this.nextTime() };
+    const hash = (await this.apply(op)) as Hex;
+    this.persist();
+    return hash;
   }
 
   setBalance(address: string, wei: bigint): Promise<void> {
-    return this.serial(async () => {
-      await this.apply({ t: 'balance', address: lower(address), wei: wei.toString() });
-      this.persist();
-    });
+    return this.serial(() => this.setBalanceNow(address, wei));
+  }
+
+  private async setBalanceNow(address: string, wei: bigint): Promise<void> {
+    await this.apply({ t: 'balance', address: lower(address), wei: wei.toString() });
+    this.persist();
+  }
+
+  /** Add `wei` to the balance (one step, so nothing runs in between). */
+  addBalance(address: string, wei: bigint): Promise<void> {
+    return this.serial(async () => this.setBalanceNow(address, (await this.balanceNow(address)) + wei));
   }
 
   /** evm_increaseTime + evm_mine. */
   increaseTime(seconds: number): Promise<number> {
-    return this.serial(async () => {
-      const time = Math.max(this.latest.timestamp + 1, this.now() + this.offset + seconds);
-      await this.apply({ t: 'warp', seconds, time });
-      this.persist();
-      return time;
-    });
+    return this.serial(() => this.increaseTimeNow(seconds));
+  }
+
+  private async increaseTimeNow(seconds: number): Promise<number> {
+    const time = Math.max(this.latest.timestamp + 1, this.now() + this.offset + seconds);
+    await this.apply({ t: 'warp', seconds, time });
+    this.persist();
+    return time;
   }
 
   /** Chain time: the latest block's timestamp. */
@@ -322,12 +336,20 @@ export class MockEvm {
     return this.latest.timestamp;
   }
 
-  async balance(address: string): Promise<bigint> {
+  balance(address: string): Promise<bigint> {
+    return this.serial(() => this.balanceNow(address));
+  }
+
+  private async balanceNow(address: string): Promise<bigint> {
     return (await this.vm.stateManager.getAccount(createAddressFromString(address)))?.balance ?? 0n;
   }
 
   /** Read-only call (eth_call) at the latest state. */
-  async call(p: { from?: string; to?: string; data?: string; value?: bigint; gas?: bigint }): Promise<{ ok: boolean; returnValue: Hex; gasUsed: bigint }> {
+  call(p: { from?: string; to?: string; data?: string; value?: bigint; gas?: bigint }): Promise<{ ok: boolean; returnValue: Hex; gasUsed: bigint }> {
+    return this.serial(() => this.callNow(p));
+  }
+
+  private async callNow(p: { from?: string; to?: string; data?: string; value?: bigint; gas?: bigint }): Promise<{ ok: boolean; returnValue: Hex; gasUsed: bigint }> {
     await this.vm.stateManager.checkpoint();
     try {
       const block = this.blockAt(this.blocks.length, this.nextTime());
@@ -351,7 +373,11 @@ export class MockEvm {
   // ---------- JSON-RPC ----------
 
   /** EIP-1193 request: the methods viem and core use, plus the anvil helpers. */
-  request({ method, params = [] }: { method: string; params?: unknown[] }): Promise<unknown> {
+  request(args: { method: string; params?: unknown[] }): Promise<unknown> {
+    return this.serial(() => this.dispatch(args));
+  }
+
+  private dispatch({ method, params = [] }: { method: string; params?: unknown[] }): Promise<unknown> {
     const p = params as any[]; // eslint-disable-line @typescript-eslint/no-explicit-any
     switch (method) {
       case 'eth_chainId': return Promise.resolve(hx(this.chainId));
@@ -360,7 +386,7 @@ export class MockEvm {
       case 'eth_gasPrice': return Promise.resolve(hx(BASE_FEE + PRIORITY_FEE));
       case 'eth_maxPriorityFeePerGas': return Promise.resolve(hx(PRIORITY_FEE));
       case 'eth_feeHistory': return Promise.resolve(this.feeHistory(Number(p[0] ?? 1)));
-      case 'eth_getBalance': return this.balance(p[0]).then(hx);
+      case 'eth_getBalance': return this.balanceNow(p[0]).then(hx);
       case 'eth_getTransactionCount':
         return this.vm.stateManager.getAccount(createAddressFromString(p[0])).then((a) => hx(a?.nonce ?? 0n));
       case 'eth_getCode':
@@ -371,15 +397,15 @@ export class MockEvm {
           .then((v) => `0x${bytesToHex(v).slice(2).padStart(64, '0')}`);
       case 'eth_call': return this.rpcCall(p[0]);
       case 'eth_estimateGas': return this.estimateGas(p[0]);
-      case 'eth_sendRawTransaction': return this.sendRaw(p[0]);
+      case 'eth_sendRawTransaction': return this.sendRawNow(p[0]);
       case 'eth_getTransactionReceipt': return Promise.resolve(this.formatReceipt(this.receipts.get(lower(p[0]))));
       case 'eth_getTransactionByHash': return Promise.resolve(this.formatTx(this.txs.get(lower(p[0]))));
       case 'eth_getBlockByNumber': return Promise.resolve(this.formatBlock(this.blockByTag(p[0]), !!p[1]));
       case 'eth_getBlockByHash': return Promise.resolve(this.formatBlock(this.byHash.get(lower(p[0])), !!p[1]));
       case 'eth_getLogs': return Promise.resolve(this.getLogs(p[0] ?? {}));
-      case 'anvil_setBalance': return this.setBalance(p[0], BigInt(p[1])).then(() => null);
-      case 'evm_increaseTime': return this.increaseTime(Number(p[0])).then(() => hx(Number(p[0])));
-      case 'evm_mine': return this.increaseTime(0).then(() => '0x0');
+      case 'anvil_setBalance': return this.setBalanceNow(p[0], BigInt(p[1])).then(() => null);
+      case 'evm_increaseTime': return this.increaseTimeNow(Number(p[0])).then(() => hx(Number(p[0])));
+      case 'evm_mine': return this.increaseTimeNow(0).then(() => '0x0');
       default: return Promise.reject(new RpcError(-32601, `method ${method} is not supported by the mock EVM`));
     }
   }
@@ -401,14 +427,14 @@ export class MockEvm {
   }
 
   private async rpcCall(c: { from?: string; to?: string; data?: string; input?: string; value?: string; gas?: string }): Promise<Hex> {
-    const r = await this.call({ from: c.from, to: c.to, data: c.data ?? c.input, value: toBig(c.value), gas: c.gas ? BigInt(c.gas) : undefined });
+    const r = await this.callNow({ from: c.from, to: c.to, data: c.data ?? c.input, value: toBig(c.value), gas: c.gas ? BigInt(c.gas) : undefined });
     if (!r.ok) throw new RpcError(3, 'execution reverted', r.returnValue);
     return r.returnValue;
   }
 
   private async estimateGas(c: { from?: string; to?: string; data?: string; input?: string; value?: string }): Promise<Hex> {
     const data = c.data ?? c.input ?? '0x';
-    const r = await this.call({ from: c.from, to: c.to, data, value: toBig(c.value) });
+    const r = await this.callNow({ from: c.from, to: c.to, data, value: toBig(c.value) });
     if (!r.ok) throw new RpcError(3, 'execution reverted', r.returnValue);
     // Intrinsic gas (21000, calldata, creation) plus what the call used, with room for the 63/64 rule and refunds.
     const bytes = hexToBytes(data as PrefixedHexString);

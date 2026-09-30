@@ -798,7 +798,13 @@ export class MockShopperNode {
       if (late) return this.abandon(id, 'funded after the quote expired');
       this.background('purchase', id, () => this.startPurchase(id));
     } catch (err) {
-      if (err instanceof NotYet) return;
+      if (err instanceof NotYet) {
+        await this.update(id, (cur) => {
+          if (cur.state !== 'funding') return false;
+          this.note(cur, `waiting for the funding: ${err.message}`);
+        });
+        return;
+      }
       if (err instanceof Definite) {
         const back = await this.update(id, (cur) => {
           if (cur.state !== 'funding') return false;
