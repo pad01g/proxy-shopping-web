@@ -1,5 +1,5 @@
 import { verifyEvent, type EventTemplate, type NostrEvent } from 'nostr-tools/pure';
-import { KIND, tagValue } from '../nostr/kinds.js';
+import { KIND, tagValue, tagValues } from '../nostr/kinds.js';
 import { plainEvent } from '../nostr/giftwrap.js';
 import { nowSeconds } from '../util/time.js';
 import type {
@@ -14,6 +14,17 @@ const isHexKey = (s: unknown): s is string => typeof s === 'string' && /^[0-9a-f
 export function verified(e: NostrEvent): boolean {
   try {
     return verifyEvent(plainEvent(e));
+  } catch {
+    return false;
+  }
+}
+
+/** §2.2 list_url: an absolute https URL without credentials (the lab's internal CA still uses https). */
+export function isListUrl(u: unknown): u is string {
+  if (typeof u !== 'string' || u.length > 512) return false;
+  try {
+    const url = new URL(u);
+    return url.protocol === 'https:' && !!url.hostname && !url.username && !url.password;
   } catch {
     return false;
   }
@@ -37,6 +48,7 @@ export function parseDelegation(e: NostrEvent): Delegation | undefined {
     network: tagValue(e.tags, 'network') ?? '',
     revoked: tagValue(e.tags, 'revoked') === 'true',
     note,
+    listUrls: tagValues(e.tags, 'list_url').slice(0, 4).filter(isListUrl), // §2.2: the first 4, bad ones ignored
     eventId: e.id,
   };
 }
@@ -91,11 +103,17 @@ export function delegationTemplate(p: {
   network: string;
   revoked?: boolean;
   note?: string;
+  /** §2.2: where the operator puts its list bundle; left out of revoked delegations. */
+  listUrls?: string[];
 }): EventTemplate {
+  const listUrls = p.revoked ? [] : (p.listUrls ?? []);
   return {
     kind: KIND.delegation,
     created_at: nowSeconds(),
-    tags: [...versioned(p.operator, p.version, p.network), ['p', p.operator], ['revoked', p.revoked ? 'true' : 'false']],
+    tags: [
+      ...versioned(p.operator, p.version, p.network), ['p', p.operator], ['revoked', p.revoked ? 'true' : 'false'],
+      ...listUrls.map((u) => ['list_url', u]),
+    ],
     content: JSON.stringify(p.note ? { note: p.note } : {}),
   };
 }

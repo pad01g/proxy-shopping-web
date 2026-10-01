@@ -32,6 +32,34 @@ export const innerEvent: Check<Inner> = obj({
   sig: hexN(64),
 });
 
+/** A libp2p peer ID as text (base58btc: 12D3Koo… / 16Uiu2… / Qm…). */
+const PEER_ID = /^[1-9A-HJ-NP-Za-km-z]{32,128}$/;
+
+/** Why `v` is not a usable libp2p destination (§4.4 reply_p2p, §3 p2p), or undefined when it is. */
+export function p2pAddrProblem(v: unknown): string | undefined {
+  const a = v as { peer_id?: unknown; addrs?: unknown };
+  if (!a || typeof a !== 'object') return 'not an object';
+  if (typeof a.peer_id !== 'string' || !PEER_ID.test(a.peer_id)) return 'peer_id is not a libp2p peer ID';
+  if (!Array.isArray(a.addrs) || a.addrs.length > 8) return 'addrs must be a list of at most 8 multiaddrs';
+  for (const m of a.addrs) {
+    if (typeof m !== 'string' || !m.startsWith('/') || new TextEncoder().encode(m).length > 1024) return 'addrs: not a multiaddr of at most 1024 bytes';
+    const parts = m.split('/');
+    // A trailing /p2p/<id> must be the peer itself.
+    if (parts.length >= 3 && parts[parts.length - 2] === 'p2p' && parts[parts.length - 1] !== a.peer_id) return 'addrs: ends in another peer ID';
+  }
+  return undefined;
+}
+
+/**
+ * A libp2p destination (§10). Lenient: a destination that does not pass the checks of §4.4 is dropped
+ * (undefined), never the message or profile that carries it.
+ */
+export const p2pAddr: Check<{ peer_id: string; addrs: string[] } | undefined> = (v) => {
+  if (v === undefined || v === null || p2pAddrProblem(v)) return undefined;
+  const a = v as { peer_id: string; addrs: string[] };
+  return { peer_id: a.peer_id, addrs: [...a.addrs] };
+};
+
 export const money: Check<Money> = obj({ amount: decStr, currency: str(8, /^[A-Za-z]{2,8}$/) });
 
 export const evidence: Check<Evidence> = obj({
@@ -92,6 +120,7 @@ export const orderRequest: Check<OrderRequest> = obj({
   user_btc_address: opt(btcAddress),
   user_evm_address: opt(evmAddress),
   relays: arr(str(256), 16),
+  reply_p2p: p2pAddr,
 });
 
 export const orderQuote: Check<OrderQuote> = obj({

@@ -57,6 +57,8 @@ export interface OrderRequest {
   user_btc_address?: string;
   user_evm_address?: string;
   relays: string[];
+  /** §4.4: where the user takes P2P messages (§10); covered by the user's signature on the inner. */
+  reply_p2p?: { peer_id: string; addrs: string[] };
 }
 
 export interface FxInfo {

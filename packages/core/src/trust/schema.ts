@@ -1,5 +1,5 @@
 /** Schemas of the signed trust / profile contents (§2.3, §3.1, §3.2); anything else is ignored. */
-import { money } from '../nostr/schema.js';
+import { money, p2pAddr } from '../nostr/schema.js';
 import type { Payment } from '../nostr/messages.js';
 import {
   arr, btcAddress, evmAddress, hex64, int, map, obj, opt, str, uintStr, decStr, type Check,
@@ -11,14 +11,14 @@ const PAYMENTS: readonly Payment[] = ['btc-signet', 'usdc-evm'];
 const payments = map(arr(str(32), 16), (xs) => xs.filter((x): x is Payment => PAYMENTS.includes(x as Payment)));
 const region = str(64, /^[A-Z]{2}(-[A-Z0-9]{1,10}){0,4}$/);
 const name = str(200);
-const p2p = opt(obj({ peer_id: str(128), addrs: arr(str(256), 32) }));
+const p2p = p2pAddr;
 
 export const shopperProfileContent: Check<ShopperProfileContent> = obj({
   name,
   payments,
   currencies: arr(str(8), 16),
   cash_regions: arr(region, 64),
-  fee: obj({ bps: int(0, 10_000), min: opt(money) }),
+  fee: opt(obj({ bps: int(0, 10_000), min: opt(money) })),
   max_order: opt(money),
   delivery_days: int(0, 365),
   evm_address: opt(evmAddress),
@@ -64,6 +64,8 @@ export const operatorListContent: Check<OperatorListContent> = (v, path) => {
     name: map(opt(name), (x) => x ?? ''),
     regions: arr(region, 256),
     relays: arr(obj({ url: str(256), retention_days: opt(int(0, 3650)) }), 32),
+    // §2.3: unreadable entries are ignored, never the list.
+    p2p_relays: (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.startsWith('/') && x.length <= 1024).slice(0, 16) : undefined),
     chain: opt(obj({
       btc: opt(obj({ network: str(32), esplora: arr(str(256), 8) })),
       evm: opt(obj({ chain_id: int(1), rpc: arr(str(256), 8), usdc: evmAddress, safe: safeAddresses })),

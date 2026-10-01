@@ -25,6 +25,8 @@ export interface OperatorListContent {
   name: string;
   regions: string[];
   relays: Array<{ url: string; retention_days?: number }>;
+  /** p2p relays of this network (§2.3, §10): multiaddrs, at least one /tls/ws for apps and browsers. */
+  p2p_relays?: string[];
   chain?: {
     btc?: { network: string; esplora: string[] };
     evm?: { chain_id: number; rpc: string[]; usdc: string; safe: SafeAddresses };
@@ -41,6 +43,8 @@ export interface Delegation {
   network: string;
   revoked: boolean;
   note?: string;
+  /** §2.2: where the operator puts its list bundle (§2.6); signed by the coordinator as list_url tags. */
+  listUrls: string[];
   eventId: string;
 }
 
@@ -68,12 +72,19 @@ export interface ShopperProfileContent {
   payments: Payment[];
   currencies: string[];
   cash_regions: string[];
-  fee: { bps: number; min?: { amount: string; currency: string } };
+  /** Optional like in the Go node (the quote carries the fee that counts). */
+  fee?: { bps: number; min?: { amount: string; currency: string } };
   max_order?: { amount: string; currency: string };
   delivery_days: number;
   evm_address?: string;
   btc_address?: string;
-  p2p?: { peer_id: string; addrs: string[] };
+  p2p?: P2PAddr;
+}
+
+/** A libp2p destination (§10): peer ID and multiaddrs, circuit addresses included. */
+export interface P2PAddr {
+  peer_id: string;
+  addrs: string[];
 }
 
 /** Escrow profile content, kind 30503 (§3.2). */
@@ -84,5 +95,5 @@ export interface EscrowProfileContent {
   evm_address: string;
   upfront_fee: { bps: number; min_sats: string; min_usdc: string };
   dispute_fee_bps: number;
-  p2p?: { peer_id: string; addrs: string[] };
+  p2p?: P2PAddr;
 }
