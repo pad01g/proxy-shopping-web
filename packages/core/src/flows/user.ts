@@ -311,6 +311,9 @@ export class UserClient extends Emitter<Events> {
         : await signKeyProofEvm(me.evmAccount, orderId, myPubkey),
       relays: this.s.config.relays,
     };
+    // §4.4 reply_p2p: where the shopper (and, through escrow.notice, the escrow) can reach us over P2P.
+    const replyP2P = this.s.p2pSelf();
+    if (replyP2P) request.reply_p2p = replyP2P;
     if (input.payment === 'btc-signet') {
       request.user_btc_pubkey = toHex(me.orderKey(orderId).publicKey);
       request.user_btc_address = me.btcWallet.address;

@@ -87,8 +87,8 @@ export function NewOrderPage() {
                 <span className="badge">{o.entry.region}</span>
               </div>
               <p className="muted">
-                手数料 {o.shopper ? `${o.shopper.content.fee.bps / 100}%` : '?'}
-                {o.shopper?.content.fee.min ? `（最低 ${o.shopper.content.fee.min.amount} ${o.shopper.content.fee.min.currency}）` : ''}
+                手数料 {o.shopper?.content.fee ? `${o.shopper.content.fee.bps / 100}%` : '?'}
+                {o.shopper?.content.fee?.min ? `（最低 ${o.shopper.content.fee.min.amount} ${o.shopper.content.fee.min.currency}）` : ''}
                 ・ 配送 {o.shopper?.content.delivery_days ?? '?'} 日 ・ escrow 前払い {o.escrow ? `${o.escrow.content.upfront_fee.bps / 100}%` : '?'}
                 ・ 紛争手数料 {o.escrow ? `${o.escrow.content.dispute_fee_bps / 100}%` : '?'} ・ SLA {o.entry.escrow_sla_days} 日
               </p>

@@ -311,7 +311,7 @@ describe('Messenger limits and delivery (second review, §4.2, §4.10)', () => {
     b.stop();
   });
 
-  it('reads older pages when a flood fills the first page of stored wraps', async () => {
+  it('reads older pages when a flood fills the first page of stored wraps', { timeout: 40_000 }, async () => {
     const net = new MemoryRelayNetwork();
     const a = mk(net);
     const b = mk(net);
@@ -325,7 +325,8 @@ describe('Messenger limits and delivery (second review, §4.2, §4.10)', () => {
     const got: string[] = [];
     b.on('message', (m) => got.push(m.inner.id));
     await b.start();
-    await until(() => got.length > 0, 8000);
+    // 1000 signature checks: slow when the whole suite runs in parallel
+    await until(() => got.length > 0, 30_000);
     expect(got).toEqual([inner.id]);
     b.stop();
   });

@@ -18,6 +18,10 @@
       "types": "./dist/browser.d.ts",
       "import": "./dist/browser.js"
     },
+    "./p2p": {
+      "types": "./dist/p2p.d.ts",
+      "import": "./dist/p2p.js"
+    },
     "./testing": {
       "types": "./dist/testing.d.ts",
       "import": "./dist/testing.js"
@@ -34,9 +38,21 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --dir src",
-    "test:integration": "vitest run --dir test/integration"
+    "test:integration": "vitest run --dir test/integration",
+    "test:interop": "vitest run --dir test/interop"
   },
   "dependencies": {
+    "@libp2p/circuit-relay-v2": "^4.2.13",
+    "@libp2p/crypto": "^5.1.23",
+    "@libp2p/gossipsub": "^17.1.2",
+    "@libp2p/identify": "^4.1.14",
+    "@libp2p/interface": "^3.3.0",
+    "@libp2p/noise": "^17.0.3",
+    "@libp2p/peer-id": "^6.0.15",
+    "@libp2p/webrtc": "^6.0.33",
+    "@libp2p/websockets": "^10.1.21",
+    "@libp2p/yamux": "^8.0.3",
+    "@multiformats/multiaddr": "^13.0.3",
     "@noble/ciphers": "~1.3.0",
     "@noble/curves": "~1.9.7",
     "@noble/hashes": "~1.8.0",
@@ -44,6 +60,7 @@
     "@scure/bip32": "~1.7.0",
     "@scure/bip39": "~1.6.0",
     "@scure/btc-signer": "~1.8.1",
+    "libp2p": "^3.3.11",
     "nostr-tools": "~2.25.2",
     "viem": "~2.56.9",
     "ws": "^8.18.3"

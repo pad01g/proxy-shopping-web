@@ -165,6 +165,7 @@ export class EscrowClient extends Emitter<Events> {
   private readonly lock = new KeyedMutex();
   private unsubscribe?: () => void;
   private unaccept?: () => void;
+  private unaddrs?: () => void;
   private poller?: ReturnType<typeof setInterval>;
 
   constructor(
@@ -185,6 +186,12 @@ export class EscrowClient extends Emitter<Events> {
       if (meta.type === MSG.escrowNotice || meta.type === MSG.disputeOpen) return (await this.namesUs(inner, meta.type)) ? 'stranger' : 'reject';
       return 'reject';
     });
+    // §12: the profile's p2p follows our relay reservations.
+    let t: ReturnType<typeof setTimeout> | undefined;
+    this.unaddrs ??= this.s.onP2PAddrs(() => {
+      if (t) clearTimeout(t);
+      t = setTimeout(() => void this.republishIfP2PChanged().catch((error) => this.emit('error', { orderId: '', error })), 5000);
+    });
     const every = this.opts.chainPollMs ?? 5000;
     if (every > 0 && !this.poller) {
       this.poller = setInterval(() => void this.poll(), every);
@@ -194,6 +201,8 @@ export class EscrowClient extends Emitter<Events> {
   }
 
   detach(): void {
+    this.unaddrs?.();
+    this.unaddrs = undefined;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.unaccept?.();
@@ -206,8 +215,9 @@ export class EscrowClient extends Emitter<Events> {
     this.opts.deployments = d;
   }
 
-  /** Profile content derived from our keys plus the given terms. */
+  /** Profile content derived from our keys plus the given terms; with our P2P destination when P2P runs (§3.2, §10). */
   profileContent(p: Pick<EscrowProfileContent, 'name' | 'upfront_fee' | 'dispute_fee_bps'>): EscrowProfileContent {
+    const p2p = this.s.p2pSelf();
     return {
       name: p.name,
       btc_xpub: this.s.keys.escrowXpub,
@@ -215,7 +225,25 @@ export class EscrowClient extends Emitter<Events> {
       evm_address: this.s.keys.evmAddress,
       upfront_fee: p.upfront_fee,
       dispute_fee_bps: p.dispute_fee_bps,
+      ...(p2p ? { p2p } : {}),
     };
+  }
+
+  /**
+   * §12: our P2P addresses change with relay reservations; publish the profile again when its `p2p` is no longer
+   * what we have (only when we published one before). Returns whether it republished.
+   */
+  async republishIfP2PChanged(): Promise<boolean> {
+    const ev = await this.s.ownLatest(KIND.escrowProfile, this.s.network).catch(() => undefined);
+    const cur = ev && parseEscrowProfile(ev)?.content;
+    if (!cur) return false;
+    const want = this.s.p2pSelf();
+    const same = (a?: { peer_id: string; addrs: string[] }, b?: { peer_id: string; addrs: string[] }) =>
+      (a?.peer_id ?? '') === (b?.peer_id ?? '') && JSON.stringify([...(a?.addrs ?? [])].sort()) === JSON.stringify([...(b?.addrs ?? [])].sort());
+    if (!want || same(cur.p2p, want)) return false;
+    const v = await this.s.nextVersion(KIND.escrowProfile, this.s.network);
+    await this.s.publishOwn(escrowProfileTemplate({ ...cur, p2p: want }, this.s.network, v));
+    return true;
   }
 
   /** Publish kind 30503 (bumping v) and our kind 10050 inbox relays. */

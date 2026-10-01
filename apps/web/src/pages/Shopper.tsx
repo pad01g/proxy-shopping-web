@@ -22,8 +22,8 @@ export function ShopperPage() {
         <div className="grid2">
           <Field label="名前"><input data-testid="shopper-name" value={p.name} onChange={(e) => setP({ ...p, name: e.target.value })} /></Field>
           <Field label="配送日数"><input data-testid="shopper-delivery-days" type="number" value={p.delivery_days} onChange={(e) => setP({ ...p, delivery_days: Number(e.target.value) })} /></Field>
-          <Field label="手数料 bps"><input data-testid="shopper-fee-bps" type="number" value={p.fee.bps} onChange={(e) => setP({ ...p, fee: { ...p.fee, bps: Number(e.target.value) } })} /></Field>
-          <Field label="最低手数料（JPY）"><input data-testid="shopper-fee-min" value={p.fee.min?.amount ?? ''} onChange={(e) => setP({ ...p, fee: { ...p.fee, min: { amount: e.target.value, currency: 'JPY' } } })} /></Field>
+          <Field label="手数料 bps"><input data-testid="shopper-fee-bps" type="number" value={p.fee?.bps ?? 0} onChange={(e) => setP({ ...p, fee: { ...p.fee, bps: Number(e.target.value) } })} /></Field>
+          <Field label="最低手数料（JPY）"><input data-testid="shopper-fee-min" value={p.fee?.min?.amount ?? ''} onChange={(e) => setP({ ...p, fee: { bps: 0, ...p.fee, min: { amount: e.target.value, currency: 'JPY' } } })} /></Field>
           <Field label="上限（JPY）"><input data-testid="shopper-max-order" value={p.max_order?.amount ?? ''} onChange={(e) => setP({ ...p, max_order: { amount: e.target.value, currency: 'JPY' } })} /></Field>
           <Field label="通貨（カンマ区切り）"><input data-testid="shopper-currencies" value={p.currencies.join(',')} onChange={(e) => setP({ ...p, currencies: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} /></Field>
           <Field label="BTC 受取アドレス"><input data-testid="shopper-btc-address" value={p.btc_address ?? ''} onChange={(e) => setP({ ...p, btc_address: e.target.value })} /></Field>

@@ -1,16 +1,19 @@
-import type { NostrEvent } from 'nostr-tools/pure';
+import { verifyEvent, type NostrEvent } from 'nostr-tools/pure';
 import type { IdentitySigner } from '../keys/signer.js';
 import type { Storage } from '../storage/types.js';
 import { Emitter } from '../util/emitter.js';
 import { isAllowedEndpoint } from '../util/endpoint.js';
 import { KeyedMutex, nowSeconds } from '../util/time.js';
-import { giftWrap, innerMeta, signInner, unwrap, type Inner } from './giftwrap.js';
+import { giftWrap, innerMeta, plainEvent, signInner, unwrap, type Inner } from './giftwrap.js';
 import { KIND, tagValues } from './kinds.js';
 import { MAX_INNER_BYTES, MSG } from './messages.js';
 import { parseBody } from './schema.js';
 import { unique, type NostrTransport, type PublishResult, type Subscription } from './transport.js';
 import { latestByAddress } from '../trust/versions.js';
 import { verified } from '../trust/events.js';
+import type { P2PAddr } from '../trust/types.js';
+import { wrapProblem } from '../p2p/framing.js';
+import { MSG_TIMEOUT_MS, type WrapCarrier, type WrapReply } from '../p2p/types.js';
 
 export interface IncomingMessage<T = unknown> {
   inner: Inner;
@@ -30,7 +33,15 @@ interface OutboxEntry {
   acked: boolean;
   /** Resends so far; resends 1, 2, 4, 8, … get a fresh wrap (see `rewrap`). */
   resends?: number;
+  /** The receiver took a send over /ps/msg (§4.2; transport receipt only, the signed ack still counts). */
+  p2p?: boolean;
 }
+
+/** What became of an incoming wrap. */
+type Verdict = 'new' | 'duplicate' | 'ack' | 'unwrap' | 'limited' | 'refused' | 'invalid' | 'error';
+
+/** Where a peer reads P2P messages: its profile `p2p` or the `reply_p2p` of a signed order.request (§4.2). */
+export type P2PResolver = (recipient: string) => P2PAddr | undefined | Promise<P2PAddr | undefined>;
 
 /**
  * How the roles see an incoming message (§4.10):
@@ -71,6 +82,10 @@ export interface MessengerOptions {
   maxBacklogStrangers?: number;
   /** Which messages some role accepts; without it every message is treated as from a counterparty. */
   accepts?: AcceptFn;
+  /** Inbox relays known without asking the relays (10050 from bundles / P2P, §2.6). */
+  knownInbox?: (pubkey: string) => string[] | undefined;
+  /** Also look 10050 up on the relays when `knownInbox` has it (default true). */
+  queryInbox?: () => boolean;
 }
 
 /** Stored gift wraps fetched per page when the inbox subscription starts (the rest arrive live, §4.10). */
@@ -86,6 +101,8 @@ type Events = {
   /** A message that unwrapped fine but whose body does not fit its schema (§4.10), was rate limited, or no role accepts. */
   dropped: { inner: Inner; reason: string };
   error: Error;
+  /** A wrap went out: over P2P (/ps/msg answered ok) or to the Nostr mailbox. */
+  sent: { id: string; via: 'p2p' | 'nostr' };
 };
 
 const SEVEN_DAYS_MS = 7 * 24 * 3600 * 1000;
@@ -143,6 +160,10 @@ export class Messenger extends Emitter<Events> {
   private live = false;
   /** Inner ids whose body failed its schema (so relay copies are not re-reported). */
   private readonly dropped = new Set<string>();
+  private p2p?: WrapCarrier;
+  private p2pResolve?: P2PResolver;
+  private readonly knownInbox?: (pubkey: string) => string[] | undefined;
+  private readonly queryInbox: () => boolean;
 
   constructor(opts: MessengerOptions) {
     super();
@@ -159,6 +180,59 @@ export class Messenger extends Emitter<Events> {
     this.backlogPerSender = opts.maxBacklogPerSender ?? this.perMinute * 10;
     this.backlogStrangers = opts.maxBacklogStrangers ?? this.strangersPerMinute * 10;
     this.accepts = opts.accepts;
+    this.knownInbox = opts.knownInbox;
+    this.queryInbox = opts.queryInbox ?? (() => true);
+  }
+
+  /** Send over P2P first when we know where the recipient is (§4.2); undefined turns it off. */
+  setP2P(carrier: WrapCarrier | undefined, resolve?: P2PResolver): void {
+    this.p2p = carrier;
+    this.p2pResolve = carrier ? resolve : undefined;
+  }
+
+  get p2pEnabled(): boolean {
+    return !!this.p2p;
+  }
+
+  /** Try /ps/msg (§4.2); true when the recipient answered ok within the 10 s budget. Never throws. */
+  private async sendP2P(recipient: string, wrap: NostrEvent): Promise<boolean> {
+    const carrier = this.p2p;
+    if (!carrier || !this.p2pResolve) return false;
+    try {
+      const target = await this.p2pResolve(recipient);
+      if (!target?.peer_id) return false;
+      return await carrier.sendWrap(target, wrap, { timeoutMs: MSG_TIMEOUT_MS });
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * A wrap that arrived over /ps/msg (§10): refused unless it is a validly signed wrap addressed to us; then
+   * handled exactly like one from a relay (unwrap, dedupe by inner id, limits, ack).
+   */
+  async receiveWrap(wrap: NostrEvent): Promise<WrapReply> {
+    const me = await this.pubkey();
+    const problem = wrapProblem(wrap, me);
+    if (problem) return { ok: false, error: problem };
+    let valid = false;
+    try {
+      valid = verifyEvent(plainEvent(wrap));
+    } catch {
+      valid = false;
+    }
+    if (!valid) return { ok: false, error: 'bad signature' };
+    // §4.2: ok only when the wrap was taken (stored, or the inner was already here); otherwise the sender
+    // falls back to the mailbox.
+    const verdict = await this.handleWrap(plainEvent(wrap), true).catch((err): Verdict => {
+      this.emit('error', err as Error);
+      return 'error';
+    });
+    if (verdict === 'new' || verdict === 'duplicate' || verdict === 'ack') return { ok: true };
+    const why: Record<string, string> = {
+      unwrap: 'cannot open the wrap', limited: 'rate limited', refused: 'not accepted', invalid: 'body does not match its schema', error: 'internal error',
+    };
+    return { ok: false, error: why[verdict] ?? verdict };
   }
 
   get running(): boolean {
@@ -253,9 +327,15 @@ export class Messenger extends Emitter<Events> {
   async inboxRelaysOf(pubkey: string): Promise<string[]> {
     const cached = this.inboxCache.get(pubkey);
     if (cached && Date.now() - cached.at < 5 * 60_000) return cached.relays;
+    const known = this.knownInbox?.(pubkey);
+    const usableKnown = known ? this.usableRelays(known) : [];
+    if (usableKnown.length && !this.queryInbox()) {
+      this.inboxCache.set(pubkey, { relays: usableKnown, at: Date.now() });
+      return usableKnown;
+    }
     const events = await this.transport.query(this.relays, { kinds: [KIND.inboxRelays], authors: [pubkey] }, { maxWaitMs: 2500 });
     const latest = latestByAddress(events.filter((e) => e.pubkey === pubkey && verified(e)), { requireVersion: false })[0];
-    const listed = latest ? this.usableRelays(tagValues(latest.tags, 'relay')) : [];
+    const listed = latest ? this.usableRelays(tagValues(latest.tags, 'relay')) : usableKnown;
     const relays = listed.length ? listed : this.relays;
     this.inboxCache.set(pubkey, { relays, at: Date.now() });
     trim(this.inboxCache, 1000);
@@ -287,15 +367,31 @@ export class Messenger extends Emitter<Events> {
   async sendInner(inner: Inner): Promise<void> {
     const { recipient, type } = innerMeta(inner);
     const wrap = await giftWrap(this.signer, inner, recipient);
-    // publishWrap reaches k of these, trying the next ones only when some fail (§4.2, §4.10).
-    const relays = await this.inboxRelaysOf(recipient);
     const now = Date.now();
+    const key = `outbox/${inner.id}`;
     if (type !== MSG.ack) {
-      await this.store.put<OutboxEntry>(`outbox/${inner.id}`, {
-        inner, wrap, recipient, relays, firstSentAt: now, lastSentAt: now, acked: false, resends: 0,
+      // Stored first so the retry loop covers us whatever happens below; relays are looked up when needed.
+      await this.store.put<OutboxEntry>(key, {
+        inner, wrap, recipient, relays: [], firstSentAt: now, lastSentAt: now, acked: false, resends: 0,
       });
     }
+    // §4.2: P2P first when we know where the recipient is; the Nostr mailbox when that did not work.
+    if (await this.sendP2P(recipient, wrap)) {
+      if (type !== MSG.ack) {
+        const e = await this.store.get<OutboxEntry>(key);
+        if (e) await this.store.put<OutboxEntry>(key, { ...e, p2p: true });
+      }
+      this.emit('sent', { id: inner.id, via: 'p2p' });
+      return;
+    }
+    // publishWrap reaches k of these, trying the next ones only when some fail (§4.2, §4.10).
+    const relays = await this.inboxRelaysOf(recipient);
+    if (type !== MSG.ack) {
+      const e = await this.store.get<OutboxEntry>(key);
+      if (e) await this.store.put<OutboxEntry>(key, { ...e, relays });
+    }
     await this.publishWrap(wrap, relays);
+    this.emit('sent', { id: inner.id, via: 'nostr' });
   }
 
   async pending(): Promise<Inner[]> {
@@ -344,6 +440,9 @@ export class Messenger extends Emitter<Events> {
         const relays = await this.inboxRelaysOf(e.recipient).catch(() => e.relays);
         const wrap = rewrap(resends) ? await giftWrap(this.signer, e.inner, e.recipient) : e.wrap;
         await this.store.put<OutboxEntry>(key, { ...e, wrap, relays, resends, lastSentAt: now });
+        // §4.2: resends until the ack may use both paths.
+        const p2p = await this.sendP2P(e.recipient, wrap);
+        if (p2p && !e.p2p) await this.store.put<OutboxEntry>(key, { ...e, wrap, relays, resends, lastSentAt: now, p2p });
         await this.publishWrap(wrap, relays);
       } catch (err) {
         this.emit('error', err as Error);
@@ -351,19 +450,21 @@ export class Messenger extends Emitter<Events> {
     }
   }
 
-  private async handleWrap(wrap: NostrEvent, live = true): Promise<void> {
+  private async handleWrap(wrap: NostrEvent, live = true): Promise<Verdict> {
     let inner: Inner;
     try {
       inner = await unwrap(this.signer, wrap);
     } catch {
-      return; // not for us, or forged: ignore silently
+      return 'unwrap'; // not for us, or forged: ignore silently
     }
     const meta = innerMeta(inner);
     if (meta.type === MSG.ack) {
       // Acks only ever flip our own outbox entries (and only from their recipient), so the per-sender limit is enough.
-      const body = this.admit(inner.pubkey, 'counterparty', live) ? parseInner(meta.type, inner) : undefined;
-      if (body) await this.handleAck(inner, body as { ids: string[] });
-      return;
+      if (!this.admit(inner.pubkey, 'counterparty', live)) return 'limited';
+      const body = parseInner(meta.type, inner);
+      if (!body) return 'invalid';
+      await this.handleAck(inner, body as { ids: string[] });
+      return 'ack';
     }
     const key = `inbox/${inner.id}`;
     let body: unknown;
@@ -384,13 +485,21 @@ export class Messenger extends Emitter<Events> {
       return 'new';
     });
     // No ack when rate limited or refused: the sender retries later, which is the back-pressure we want.
-    if (verdict === 'limited') return this.emit('dropped', { inner, reason: 'rate limited' });
-    if (verdict === 'refused') return this.emit('dropped', { inner, reason: 'no role accepts this message' });
+    if (verdict === 'limited') {
+      this.emit('dropped', { inner, reason: 'rate limited' });
+      return verdict;
+    }
+    if (verdict === 'refused') {
+      this.emit('dropped', { inner, reason: 'no role accepts this message' });
+      return verdict;
+    }
     // Ack everything else, even duplicates (a resend means our previous ack was lost) and invalid
-    // bodies (so the sender stops retrying) — but never hand an unchecked body to the roles.
-    await this.sendAck(inner);
+    // bodies (so the sender stops retrying) — but never hand an unchecked body to the roles. The ack is not
+    // awaited: over P2P it may take the whole send budget, and the /ps/msg answer must not wait for it.
+    void this.sendAck(inner).catch((err) => this.emit('error', err as Error));
     if (verdict === 'invalid') this.emit('dropped', { inner, reason: `body of ${meta.type || 'untyped message'} does not match its schema` });
     if (verdict === 'new') this.emit('message', { inner, from: inner.pubkey, orderId: meta.orderId, type: meta.type, body });
+    return verdict;
   }
 
   /**

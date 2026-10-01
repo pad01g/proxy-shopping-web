@@ -12,6 +12,16 @@ import { predictSafeAddress, safeInitializer, safeSaltNonce } from './evm/safe.j
 import { packSignatures, releaseSafeTx, safeTxFromJson, safeTxHash, safeTxTransfers, signSafeTx, splitSafeTx } from './evm/safetx.js';
 import { SAFE_PROXY_CREATION_CODE, SAFE_V141_CANONICAL_PROXY_CREATION_CODE } from './evm/proxy-creation-code.js';
 import { escrowPubkeyFromXpub, KeySet } from './keys/derive.js';
+import { libp2pPeerId, libp2pPrivateKey } from './p2p/node.js';
+import { publicKeyToProtobuf } from '@libp2p/crypto/keys';
+import type { NostrEvent } from 'nostr-tools/pure';
+import { serveWrapStream } from './p2p/framing.js';
+import { MAX_MSG_BYTES, PROTO_MSG } from './p2p/types.js';
+import { p2pAddr, p2pAddrProblem } from './nostr/schema.js';
+import { MemoryStorage } from './storage/memory.js';
+import { MemoryRelayNetwork } from './testing/memory-transport.js';
+import { TrustDirectory } from './trust/directory.js';
+import { parseDelegation } from './trust/events.js';
 import { orderIndex } from './keys/order.js';
 import { LocalSigner } from './keys/signer.js';
 import { unwrap } from './nostr/giftwrap.js';
@@ -45,6 +55,67 @@ describe.skipIf(!present)('Go test vectors', () => {
       expect(ks.btcWallet.address, name).toBe(k.btc_address);
       expect(ks.escrowXpub, name).toBe(k.btc_escrow_xpub);
     }
+  });
+
+  it('libp2p peer IDs (§1 m/7333\'/0\'/0\', §10): the same as the Go node', () => {
+    // The "abandon" mnemonic must have one; every key that has a vector must match it.
+    expect(V.keys.abandon.libp2p_peer_id).toMatch(/^16Uiu2/);
+    for (const [name, k] of Object.entries<Record<string, string>>(V.keys)) {
+      if (!k.libp2p_peer_id) continue;
+      expect(libp2pPeerId(KeySet.fromMnemonic(k.mnemonic).libp2pSecretKey), name).toBe(k.libp2p_peer_id);
+    }
+  });
+
+  it.skipIf(!V.libp2p)('libp2p key of the abandon mnemonic (§1, §10)', () => {
+    const l = V.libp2p;
+    const ks = KeySet.fromMnemonic(l.mnemonic);
+    expect(toHex(ks.libp2pSecretKey)).toBe(l.secret);
+    const priv = libp2pPrivateKey(ks.libp2pSecretKey);
+    expect(toHex(priv.publicKey.raw)).toBe(l.pubkey_compressed);
+    expect(toHex(publicKeyToProtobuf(priv.publicKey))).toBe(l.pubkey_protobuf);
+    expect(libp2pPeerId(ks.libp2pSecretKey)).toBe(l.peer_id);
+  });
+
+  it.skipIf(!V.p2p)('P2P: list bundle with list_url, p2p_relays and profile p2p; reply_p2p; /ps/msg lines (§2.6, §4.4, §10)', async () => {
+    const p = V.p2p;
+    const coordinator = V.keys['coordinator-1'].nostr_pubkey;
+    const shopper = V.keys['shopper-1'].nostr_pubkey;
+    const fetchStub = (async (url: string) => new Response(JSON.stringify(url === p.list_url ? p.bundle : { events: [] }), { status: 200 })) as unknown as typeof fetch;
+    const net = new MemoryRelayNetwork();
+    // Only the delegation is "known" up front (as from a coordinator bundle); the rest comes from its list_url.
+    const del = (p.bundle.events as NostrEvent[]).find((e) => e.kind === 30500)!;
+    expect(parseDelegation(del)?.listUrls).toEqual([p.list_url]);
+    const dir = new TrustDirectory({
+      transport: net.transport(), storage: new MemoryStorage(), network: 'ps-lab', relays: () => [], coordinators: () => [coordinator],
+      nostr: () => false, fetch: fetchStub, bundles: () => ['https://coordinator.example/events.json'],
+    });
+    await dir.ingest([del]);
+    const snap = await dir.refresh();
+    expect(snap.entries.map((e) => e.shopper)).toEqual([shopper]);
+    expect(dir.p2pRelays()).toEqual((JSON.parse((p.bundle.events as NostrEvent[]).find((e) => e.kind === 30501)!.content) as { p2p_relays: string[] }).p2p_relays);
+    expect(dir.p2pOf(shopper)?.peer_id).toBe(V.keys['shopper-1'].libp2p_peer_id);
+    expect(dir.inboxOf(shopper)).toEqual(['wss://relay-1.test', 'wss://relay-2.test']);
+    // reply_p2p passes the §4.4 checks; a broken one is dropped, not the request
+    expect(p2pAddrProblem(p.reply_p2p.contact)).toBeUndefined();
+    expect(p2pAddr({ peer_id: p.reply_p2p.contact.peer_id, addrs: ['/dns4/x/tcp/1/p2p/16Uiu2HAkx48HBqtwZGZwjDYsv6TyyMc3xvY1nr9DKi13dCMtkeN1'] })).toBeUndefined();
+    // /ps/msg: the request line is the gift_wrap vector; our answers are byte for byte the Go lines
+    expect(p.msg.protocol).toBe(PROTO_MSG);
+    expect(p.msg.max_line).toBe(MAX_MSG_BYTES);
+    const wrap = JSON.parse(p.msg.request_line) as NostrEvent;
+    const shopperSigner = new LocalSigner(keyOf('shopper-1').nostrSecretKey);
+    const lines: string[] = [];
+    const stream = (input: string) => ({
+      send: (b: Uint8Array) => (lines.push(new TextDecoder().decode(b)), true),
+      close: async () => undefined,
+      abort: () => undefined,
+      async *[Symbol.asyncIterator]() {
+        yield new TextEncoder().encode(input);
+      },
+    });
+    const ok = await serveWrapStream(stream(p.msg.request_line), async (w) => (w.id === wrap.id && (await unwrap(shopperSigner, w)) ? { ok: true } : { ok: false }));
+    expect(ok.ok).toBe(true);
+    await serveWrapStream(stream(p.msg.request_line), async () => ({ ok: false, error: 'wrap is not for this recipient' }));
+    expect(lines).toEqual([p.msg.ok_line, p.msg.error_line]);
   });
 
   it('order idx and order keys (§1.1)', () => {

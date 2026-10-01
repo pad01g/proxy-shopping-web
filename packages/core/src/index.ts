@@ -36,7 +36,12 @@ export * from './trust/versions.js';
 export * from './trust/events.js';
 export * from './trust/effective.js';
 export { shopperProfileContent, escrowProfileContent, operatorListContent } from './trust/schema.js';
-export { TrustDirectory, bundleEvents, type Offer, type DirectorySnapshot } from './trust/directory.js';
+export { TrustDirectory, bundleEvents, syncOrder, DIRECTORY_KINDS, type Offer, type DirectorySnapshot, type SourceStatus } from './trust/directory.js';
+export { fetchBundle, MAX_BUNDLE_BYTES, MAX_BUNDLE_EVENTS } from './trust/bundle.js';
+
+// p2p (the interfaces and framing; the libp2p node itself is in '@proxy-shopping/core/p2p')
+export * from './p2p/types.js';
+export * from './p2p/framing.js';
 
 // fx
 export * from './fx/types.js';
