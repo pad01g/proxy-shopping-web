@@ -6,6 +6,9 @@
  *   PS_CONFIG_FILE  the same, from a file
  *   PS_LAB_URL      base URL of the lab's demo server (default http://localhost:8888; from Docker http://host.docker.internal:8888)
  *   PS_COORDINATORS comma-separated coordinator pubkeys that replace the preset's (advanced)
+ *   PS_P2P          1 to join the libp2p network (§10) over WSS to the p2p relays (default off)
+ *   PS_P2P_RELAYS   comma-separated p2p relay multiaddrs that replace the preset's
+ *   PS_TRUST_FROM_NOSTR 1 / 0: also fetch trust events and profiles from the Nostr relays (§2.6; default: only when P2P is off)
  */
 import { readFile } from 'node:fs/promises';
 import type { TimelockPolicy } from '@proxy-shopping/core/node';
@@ -46,7 +49,17 @@ export interface NetworkConfig {
   coordinatorsUrl?: string;
   /** Plain statements about the state of this network, shown by network_info. */
   notes: string[];
+  /** §10: libp2p over WSS to the p2p relays (optional for this client). */
+  p2p?: { enabled: boolean; relays: string[] };
+  /** §2.6: fetch trust events and profiles from Nostr too; undefined = only when P2P is off. */
+  trustFromNostr?: boolean;
 }
+
+/** The public ps-main p2p relay (a Go node, `-role relay`, WSS through a TLS front). */
+export const PS_MAIN_P2P_RELAYS = ['/dns4/gateway.tail2668e8.ts.net/tcp/8443/tls/ws/p2p/16Uiu2HAkx48HBqtwZGZwjDYsv6TyyMc3xvY1nr9DKi13dCMtkeN1'];
+
+/** Whether the trust directory also asks the Nostr relays (§2.6). */
+export const trustFromNostr = (c: NetworkConfig): boolean => c.trustFromNostr ?? !c.p2p?.enabled;
 
 export const PS_MAIN_DEFAULT_COORDINATOR = '7a0a27bb7092dc59b5bfe195d9f0e0cf81c69373b0d702a41490ed45cfccbe39';
 export const REGISTRY_REPO = 'https://github.com/pad01g/proxy-shopping-registry';
@@ -67,6 +80,7 @@ export function psMainPreset(): NetworkConfig {
     retryIntervalMs: 30_000,
     trustBundleUrls: [`${REGISTRY_BASE}/events.json`],
     coordinatorsUrl: `${REGISTRY_BASE}/coordinators.json`,
+    p2p: { enabled: false, relays: PS_MAIN_P2P_RELAYS },
     notes: [
       'ps-main is the public network. It is new: there may be no trusted shoppers yet, and orders are only as good as the shoppers and escrows that operators list.',
       'Payments on ps-main are BTC on signet (a test network: signet coins have no market value). USDC is not available on ps-main yet.',
@@ -189,6 +203,12 @@ export async function configFromEnv(env: NodeJS.ProcessEnv = process.env): Promi
     cfg.coordinators = pks.map((pubkey) => ({ pubkey, source: 'env' }));
     cfg.coordinatorsUrl = undefined;
   }
+  const flag = (v: string | undefined) => (v === undefined || v.trim() === '' ? undefined : /^(1|true|yes|on)$/i.test(v.trim()));
+  const p2p = flag(env.PS_P2P);
+  const relays = env.PS_P2P_RELAYS?.split(',').map((s) => s.trim()).filter(Boolean);
+  if (p2p !== undefined || relays) cfg.p2p = { enabled: p2p ?? cfg.p2p?.enabled ?? false, relays: relays ?? cfg.p2p?.relays ?? [] };
+  const nostr = flag(env.PS_TRUST_FROM_NOSTR);
+  if (nostr !== undefined) cfg.trustFromNostr = nostr;
   return cfg;
 }
 

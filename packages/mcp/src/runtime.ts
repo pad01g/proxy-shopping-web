@@ -4,9 +4,9 @@
  */
 import {
   bundleEvents, EsploraClient, EvmClient, FileStorage, rateSourceFromConfig, KeySet, MappedTransport, PoolTransport, Session, UserClient,
-  type Deployments, type DirectorySnapshot, type NostrTransport, type RateSource,
+  type Deployments, type DirectorySnapshot, type NostrTransport, type P2PService, type RateSource,
 } from '@proxy-shopping/core/node';
-import { parseCoordinators, type CoordinatorInfo, type NetworkConfig } from './config.js';
+import { parseCoordinators, trustFromNostr, type CoordinatorInfo, type NetworkConfig } from './config.js';
 import { loadOrCreateMnemonic, mnemonicPath, statePath } from './identity.js';
 
 export interface LabFaucet {
@@ -45,6 +45,9 @@ export interface Runtime {
   exportMnemonic?: () => Promise<string>;
   /** Why there is no EVM client, when there is none. */
   evmNote?: string;
+  /** §10: the libp2p node when PS_P2P is on and it started; p2pError tells why not. */
+  p2p?: P2PService;
+  p2pError?: string;
   close(): void;
 }
 
@@ -181,6 +184,7 @@ export async function startRuntime(cfg: NetworkConfig, opts: StartOptions): Prom
       timelockPolicy: cfg.timelockPolicy,
       maxClockSkewSeconds: cfg.maxClockSkewSeconds,
       allowPrivateEndpoints: cfg.allowPrivateEndpoints,
+      trustFromNostr: trustFromNostr(cfg),
     },
     chain: cfg.esplora ? new EsploraClient(cfg.esplora) : undefined,
     evm,
@@ -196,7 +200,7 @@ export async function startRuntime(cfg: NetworkConfig, opts: StartOptions): Prom
   const trust = new RegistryTrust(session, cfg);
   void trust.refresh().catch((err) => log(`trust refresh failed: ${(err as Error).message}`));
 
-  return {
+  const rt: Runtime = {
     cfg,
     session,
     user,
@@ -207,11 +211,33 @@ export async function startRuntime(cfg: NetworkConfig, opts: StartOptions): Prom
     exportMnemonic: async () => (await loadOrCreateMnemonic(opts.dataDir)).mnemonic,
     evmNote,
     close: () => {
+      closed = true;
+      void rt.p2p?.stop().catch(() => undefined);
       user.detach();
       session.stop();
       session.transport.close();
     },
   };
+  // §10 (optional here): WSS to the p2p relays; messages go P2P first, trust and profiles also come by gossip.
+  let closed = false;
+  if (cfg.p2p?.enabled) {
+    void import('@proxy-shopping/core/p2p')
+      .then(({ P2PNode }) => P2PNode.start({
+        secretKey: keys.libp2pSecretKey, network: cfg.network, relays: cfg.p2p?.relays, allowPrivate: cfg.allowPrivateEndpoints, webrtc: false,
+        log: (l) => log(`p2p: ${l}`),
+      }))
+      .then((node) => {
+        if (closed) return void node.stop();
+        rt.p2p = node;
+        session.attachP2P(node);
+        log(`p2p: peer ${node.peerId}`);
+      })
+      .catch((err: Error) => {
+        rt.p2pError = err.message;
+        log(`p2p start failed: ${err.message}`);
+      });
+  }
+  return rt;
 }
 
 export { mnemonicPath };

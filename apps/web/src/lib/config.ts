@@ -36,7 +36,17 @@ export interface AppConfig {
    * in seconds (default 7200). The lab ships a huge value: anvil's time is warped and its signet mines on demand.
    */
   max_clock_skew_seconds?: number;
+  /**
+   * §2.6: also fetch trust events and profiles from the Nostr relays. Unset: only when P2P is off (bundles and
+   * list_url alone may not carry every profile).
+   */
+  trust_from_nostr?: boolean;
+  /** §10: join the libp2p network over WSS to p2p relays (optional for browsers). */
+  p2p?: { enabled: boolean; relays: string[]; bootstrap?: string[]; webrtc?: boolean };
 }
+
+/** Whether the directory asks the Nostr relays for trust events and profiles too. */
+export const trustFromNostr = (c: AppConfig): boolean => c.trust_from_nostr ?? !c.p2p?.enabled;
 
 const OVERRIDES_KEY = 'ps.settings.v1';
 
@@ -68,6 +78,7 @@ export async function loadBaseConfig(): Promise<AppConfig> {
  */
 export const OVERRIDABLE: ReadonlyArray<keyof AppConfig> = [
   'network', 'relays', 'coordinators', 'trust_bundles', 'esplora', 'evm_rpc', 'chain_id', 'deployments_url', 'rates', 'faucet_url', 'max_fee_rate',
+  'trust_from_nostr', 'p2p',
 ];
 
 export function loadOverrides(): Partial<AppConfig> {

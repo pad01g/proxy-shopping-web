@@ -99,6 +99,7 @@ A panel that fails to render is replaced by `panel-error` (`data-panel` = panel 
 | `settings-rates` | rate sources table; rows `settings-rates-item`, remove `settings-rates-remove-<i>` |
 | `settings-rates-type`, `settings-rates-base`, `settings-rates-add` | add a rate source (`static` takes JSON in base) |
 | `settings-save` | persist overrides (localStorage) and reconnect; then `settings-saved` |
+| `settings-p2p` section: `settings-p2p-enabled` (checkbox, config `p2p.enabled`), `settings-p2p-relays` (list of p2p relay multiaddrs), `settings-trust-from-nostr` (checkbox, config `trust_from_nostr`; unset = only when P2P is off) | P2P (§10) and the Nostr trust path (§2.6) |
 | `settings-max-fee-rate` | cap for the BTC funding fee rate (sat/vB, default 50) |
 | `settings-reset` | drop all overrides, back to `/config.json` |
 | `settings-overrides`, rows `settings-override-item` (`data-field`), `settings-override-reset-<field>` | fields that override config.json, with a per-field reset |

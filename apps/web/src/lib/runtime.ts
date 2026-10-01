@@ -1,9 +1,9 @@
 import {
   ChainlinkSource, CoordinatorClient, deploymentsSchema, EscrowClient, EsploraClient, EvmClient,
   IndexedDBStorage, KeySet, Nip07Signer, OperatorClient, PoolTransport, rateSourceFromConfig, Session, ShopperProfile, StaticSource,
-  UserClient, type Deployments, type Nip07Provider, type RateSource,
+  UserClient, type Deployments, type Nip07Provider, type P2PService, type RateSource,
 } from '@proxy-shopping/core/browser';
-import { configProblems, type AppConfig, type RateSourceConfig } from './config';
+import { configProblems, trustFromNostr, type AppConfig, type RateSourceConfig } from './config';
 import { identityDbName, type Identity } from './identity';
 
 export interface Runtime {
@@ -19,6 +19,9 @@ export interface Runtime {
   shopper: ShopperProfile;
   deployments?: Deployments;
   deploymentsError?: string;
+  /** The libp2p node when config.p2p.enabled and it started (§10); `p2pError` says why not. */
+  p2p?: P2PService;
+  p2pError?: string;
   stop(): void;
 }
 
@@ -82,6 +85,7 @@ export async function createRuntime(config: AppConfig, identity: Identity): Prom
       network: config.network, relays: config.relays, coordinators: config.coordinators, trustBundles: config.trust_bundles,
       timelockPolicy: config.timelock_policy, allowPrivateEndpoints: !!config.allow_private_endpoints, maxFeeRate: config.max_fee_rate,
       maxClockSkewSeconds: config.max_clock_skew_seconds,
+      trustFromNostr: trustFromNostr(config),
     },
     chain,
     evm,
@@ -95,12 +99,14 @@ export async function createRuntime(config: AppConfig, identity: Identity): Prom
   void session.publishInboxRelays().catch((e) => console.warn('publish 10050 failed', e));
   void session.directory.refresh().catch((e) => console.warn('trust refresh failed', e));
 
-  return {
+  const rt: Runtime = {
     config, keys, pubkey, dbName, session, user, escrow, operator,
     coordinator: new CoordinatorClient(session),
     shopper: new ShopperProfile(session),
     deployments, deploymentsError,
     stop: () => {
+      stopped = true;
+      void rt.p2p?.stop().catch(() => undefined);
       user.detach();
       escrow.detach();
       operator.detach();
@@ -109,4 +115,23 @@ export async function createRuntime(config: AppConfig, identity: Identity): Prom
       storage.close();
     },
   };
+  // §10: optional for browsers. Loaded on demand (a separate chunk), never blocks the UI, never fatal.
+  let stopped = false;
+  if (config.p2p?.enabled) {
+    void import('@proxy-shopping/core/p2p')
+      .then(({ P2PNode }) => P2PNode.start({
+        secretKey: keys.libp2pSecretKey, network: config.network, relays: config.p2p?.relays, bootstrap: config.p2p?.bootstrap,
+        webrtc: config.p2p?.webrtc === false ? false : 'auto', allowPrivate: !!config.allow_private_endpoints,
+      }))
+      .then((node) => {
+        if (stopped) return void node.stop();
+        rt.p2p = node;
+        session.attachP2P(node);
+      })
+      .catch((e: Error) => {
+        rt.p2pError = e.message;
+        console.warn('p2p start failed', e);
+      });
+  }
+  return rt;
 }

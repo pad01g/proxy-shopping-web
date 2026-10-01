@@ -83,6 +83,32 @@ export function SettingsPage() {
         <p className="muted">登録簿の events.json など。中のイベントはリレーから届いたものと同じく検証するので、信頼は増えません。リレーが消したイベントも読めます。</p>
         <StringList testid="settings-trust-bundles" values={draft.trust_bundles ?? []} placeholder="https://…/events.json" onChange={(v) => set('trust_bundles', v)} />
       </Section>
+      <Section title="P2P（libp2p、任意）" testid="settings-p2p">
+        <label className="row">
+          <input
+            type="checkbox"
+            data-testid="settings-p2p-enabled"
+            checked={!!draft.p2p?.enabled}
+            onChange={(e) => set('p2p', { relays: [], ...draft.p2p, enabled: e.target.checked })}
+          />
+          <span>P2P を使う（p2p relay に WSS で繋ぎ、メッセージを先に P2P で送る。届かなければ Nostr のメールボックス）</span>
+        </label>
+        <StringList
+          testid="settings-p2p-relays"
+          values={draft.p2p?.relays ?? []}
+          placeholder="/dns4/…/tcp/443/tls/ws/p2p/16Uiu2…"
+          onChange={(v) => set('p2p', { enabled: !!draft.p2p?.enabled, ...draft.p2p, relays: v })}
+        />
+        <label className="row">
+          <input
+            type="checkbox"
+            data-testid="settings-trust-from-nostr"
+            checked={draft.trust_from_nostr ?? !draft.p2p?.enabled}
+            onChange={(e) => set('trust_from_nostr', e.target.checked)}
+          />
+          <span>Nostr から信頼・プロフィールも取る（決めていなければ、P2P を使わないときだけ取ります）</span>
+        </label>
+      </Section>
       <Section title="チェーン">
         <div className="grid2">
           <Field label="ネットワーク名">

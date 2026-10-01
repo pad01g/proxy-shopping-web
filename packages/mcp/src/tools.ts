@@ -302,6 +302,13 @@ export class Tools {
         evaluated_at: snap ? new Date(snap.fetchedAt).toISOString() : undefined,
       },
       identity: await this.rt.session.pubkey(),
+      p2p: cfg.p2p?.enabled
+        ? this.rt.p2p
+          ? (({ peerId, circuitAddrs, relays, peers, gossipReceived, syncReceived, messagesSent, messagesReceived }) =>
+            ({ peer_id: peerId, circuit_addrs: circuitAddrs, relays, peers, gossip_received: gossipReceived, sync_received: syncReceived, messages_sent: messagesSent, messages_received: messagesReceived }))(this.rt.p2p.status())
+          : { error: this.rt.p2pError ?? 'starting' }
+        : { enabled: false },
+      trust_from_nostr: this.rt.session.trustFromNostr,
       status,
     };
     return { text: [`Network ${cfg.network} (${cfg.preset}).`, ...status].join('\n'), data };

@@ -288,7 +288,8 @@ describe('trust bundles and config', () => {
     const empty = new MemoryRelayNetwork();
     const s = new Session({
       keys: KeySet.fromMnemonic(LAB_MNEMONICS['user-1']), transport: empty.transport(), storage: new MemoryStorage(),
-      config: { network: 'ps-lab', relays: RELAYS, coordinators: [], trustBundles: cfg.trustBundleUrls },
+      // §2.6: bundles are https only; this local http server needs the lab's allowPrivateEndpoints
+      config: { network: 'ps-lab', relays: RELAYS, coordinators: [], trustBundles: cfg.trustBundleUrls, allowPrivateEndpoints: true },
     });
     cleanups.push(() => s.transport.close());
     const trust = new RegistryTrust(s, cfg);

@@ -25,5 +25,11 @@
       "type": "frankfurter",
       "base": "https://api.frankfurter.dev/v1"
     }
-  ]
+  ],
+  "p2p": {
+    "enabled": false,
+    "relays": [
+      "/dns4/gateway.tail2668e8.ts.net/tcp/8443/tls/ws/p2p/16Uiu2HAkx48HBqtwZGZwjDYsv6TyyMc3xvY1nr9DKi13dCMtkeN1"
+    ]
+  }
 }
